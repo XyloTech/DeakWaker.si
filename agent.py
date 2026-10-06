@@ -5,11 +5,19 @@ from dataclasses import dataclass
 from typing import Callable
 
 from browser import BrowserActionError, BrowserWrapper
-from config import MAX_HISTORY_STEPS, MAX_STEPS
-from llm import LLMOutputError, TRANSPORT_ERROR_PREFIX, build_messages, render_observation
+from config import AUTO_CONFIRM, MAX_HISTORY_STEPS, MAX_STEPS
+from llm import (
+    LLMOutputError,
+    TRANSPORT_ERROR_PREFIX,
+    Verdict,
+    build_messages,
+    build_verify_messages,
+    render_observation,
+)
 
 ELEMENT_REF_PATTERN = re.compile(r"^E(\d+)$")
 SCHEME_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
+DIAGNOSTICS_TEXT_LIMIT = 300
 
 SUBMIT_LABEL_PATTERN = re.compile(
     r"\b(sign in|log in|submit|pay|purchase|buy|order|confirm|send)\b", re.IGNORECASE
@@ -83,6 +91,25 @@ def _normalize_url(url: str) -> str:
     if SCHEME_PATTERN.match(url):
         return url
     return f"https://{url}"
+
+
+def _recent_diagnostics(browser) -> str:
+    getter = getattr(browser, "get_diagnostics", None)
+    if getter is None:
+        return ""
+    try:
+        entries = [str(entry) for entry in getter()]
+    except Exception:
+        return ""
+    if not entries:
+        return ""
+    clearer = getattr(browser, "clear_diagnostics", None)
+    if clearer is not None:
+        try:
+            clearer()
+        except Exception:
+            pass
+    return "; ".join(entries)[-DIAGNOSTICS_TEXT_LIMIT:]
 
 
 async def _dispatch(
@@ -199,16 +226,55 @@ async def run_turn(
             print(format_step_line(step, max_steps, message.action, message.thought))
 
         if message.action == "done":
-            entry = {
+            try:
+                page_info = await browser.get_page_info()
+                elements = await browser.get_interactive_elements()
+                observation = render_observation(page_info, elements)
+            except BrowserActionError:
+                pass
+            verdict: Verdict | None = None
+            verify_error: str = ""
+            try:
+                verdict = await asyncio.to_thread(
+                    llm.verify, build_verify_messages(goal, observation)
+                )
+            except LLMOutputError as exc:
+                verify_error = str(exc)
+            if verdict is None:
+                verify_result = (
+                    f"ERROR: goal verifier unavailable — accepting done ({verify_error})"
+                )
+            elif verdict.complete:
+                verify_result = f"OK · verified — {verdict.reason}"
+            else:
+                verify_result = f"ERROR: GOAL NOT COMPLETE — {verdict.reason}"
+            if print_steps:
+                print(format_step_line(step, max_steps, "verify", verify_result))
+            verify_entry = {
                 "step": step,
                 "observation": observation,
-                "thought": message.thought,
-                "action": "done",
-                "result": "OK",
+                "thought": "Check whether the goal is fully completed before finishing.",
+                "action": "verify",
+                "result": verify_result,
             }
-            transcript.append(entry)
-            emit(entry)
-            return TurnResult("done", message.parameters.answer, steps_used, transcript)
+            transcript.append(verify_entry)
+            emit(verify_entry)
+            if verdict is None or verdict.complete:
+                entry = {
+                    "step": step,
+                    "observation": observation,
+                    "thought": message.thought,
+                    "action": "done",
+                    "result": "OK",
+                }
+                transcript.append(entry)
+                emit(entry)
+                return TurnResult("done", message.parameters.answer, steps_used, transcript)
+            history.append(
+                {"thought": message.thought, "action": "verify", "result": verify_result}
+            )
+            history = history[-max_history:]
+            continue
 
         index = _parse_element(message.parameters.element)
         expected: tuple[str, str] | None = None
@@ -219,9 +285,10 @@ async def run_turn(
             if observed is not None:
                 expected = (observed["role"], observed["text"])
 
-        # Guardrail: after element parsing, before dispatch.
+        # Guardrail: after element parsing, before dispatch. AUTO_CONFIRM
+        # (default on) skips the y/N prompt so the agent never stalls.
         reason = is_sensitive(message, page_info, elements)
-        if reason is not None:
+        if reason is not None and not AUTO_CONFIRM:
             target = _target_text(message, elements) or message.parameters.element or ""
             prompt = f"⚠ About to: {message.action} {target}. Proceed? [y/N] "
             approved = on_confirm(prompt) if on_confirm is not None else False
@@ -233,6 +300,10 @@ async def run_turn(
                 result = "ERROR: USER DECLINED this action"
         else:
             result = await _dispatch(message, browser, on_ask, index, expected, elements)
+        if result.startswith("ERROR"):
+            diagnostics = _recent_diagnostics(browser)
+            if diagnostics:
+                result = f"{result}\nRecent browser errors: {diagnostics}"
         entry = {
             "step": step,
             "observation": observation,

@@ -9,7 +9,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from agent import is_sensitive, run_turn
 from browser import BrowserWrapper
-from llm import ActionMessage, ActionParameters
+from llm import ActionMessage, ActionParameters, Verdict
 
 FIXTURE_URL = (pathlib.Path(__file__).parent / "fixtures" / "site.html").resolve().as_uri()
 
@@ -28,6 +28,9 @@ class ScriptedLLM:
     def next_action(self, messages: list[dict]) -> ActionMessage:
         self.calls.append(messages)
         return self._responses.pop(0)
+
+    def verify(self, messages: list[dict]) -> Verdict:
+        return Verdict(complete=True, reason="scripted: goal assumed complete")
 
 
 def last_blob(call_messages: list[dict]) -> str:
@@ -68,6 +71,38 @@ def test_submit_click_requires_confirmation_decline_feeds_llm():
             assert "click" in prompts[0]
             assert "Proceed?" in prompts[0]
             assert "USER DECLINED" in last_blob(llm.calls[1])
+        finally:
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+def test_auto_confirm_skips_prompt_when_enabled(monkeypatch):
+    async def scenario():
+        browser = BrowserWrapper()
+        await browser.start()
+        try:
+            await browser.navigate_to(FIXTURE_URL)
+            elements = await browser.get_interactive_elements()
+            submit = index_of(elements, role="button", text="Submit")
+            prompts: list[str] = []
+            llm = ScriptedLLM(
+                [
+                    make_action("submit the form", "click", element=f"E{submit}"),
+                    make_action("finish", "done", answer="submitted"),
+                ]
+            )
+
+            def on_confirm(prompt: str) -> bool:
+                prompts.append(prompt)
+                return False
+
+            monkeypatch.setattr("agent.AUTO_CONFIRM", True)
+            result = await run_turn("Submit the form", browser, llm, on_confirm=on_confirm)
+
+            assert result.status == "done"
+            assert prompts == []
+            assert result.transcript[0]["result"] == "OK"
         finally:
             await browser.close()
 

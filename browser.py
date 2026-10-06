@@ -1,3 +1,5 @@
+from collections import deque
+
 from playwright.async_api import (
     BrowserContext,
     Error as PlaywrightError,
@@ -6,11 +8,20 @@ from playwright.async_api import (
     async_playwright,
 )
 
-from config import HEADLESS, OBSERVATION_TEXT_LIMIT, SLOW_MO_MS, USER_DATA_DIR
+from config import (
+    BROWSER_CHANNEL,
+    HEADLESS,
+    OBSERVATION_TEXT_LIMIT,
+    SLOW_MO_MS,
+    USER_DATA_DIR,
+)
 
 ACTION_TIMEOUT_MS = 3000
 NAVIGATE_TIMEOUT_MS = 15000
 SCROLL_STEP_PX = 600
+
+NO_CHANNEL_TOKENS = frozenset({"", "none", "off", "bundled"})
+DIAGNOSTICS_LIMIT = 20
 
 _COLLECT_ELEMENTS_JS = """
 () => {
@@ -91,16 +102,28 @@ class BrowserActionError(Exception):
     pass
 
 
+def _resolve_channel(value: str) -> str | None:
+    if value.strip().lower() in NO_CHANNEL_TOKENS:
+        return None
+    return value
+
+
 class BrowserWrapper:
     def __init__(
-        self, *, headless: bool | None = None, slow_mo: int | None = None
+        self,
+        *,
+        headless: bool | None = None,
+        slow_mo: int | None = None,
+        channel: str | None = None,
     ):
         self.headless = HEADLESS if headless is None else headless
         self.slow_mo = SLOW_MO_MS if slow_mo is None else slow_mo
+        self.channel = BROWSER_CHANNEL if channel is None else channel
         self._playwright: Playwright | None = None
         self._browser: BrowserContext | None = None
         self._page: Page | None = None
         self._elements: list[dict] = []
+        self._diagnostics: deque[str] = deque(maxlen=DIAGNOSTICS_LIMIT)
 
     async def start(self) -> None:
         if self._page is not None and not self._page.is_closed():
@@ -109,15 +132,67 @@ class BrowserWrapper:
             await self.close()
         try:
             self._playwright = await async_playwright().start()
-            self._browser = await self._playwright.chromium.launch_persistent_context(
-                USER_DATA_DIR, headless=self.headless, slow_mo=self.slow_mo
-            )
-            if self._browser.pages:
-                self._page = self._browser.pages[0]
-            else:
-                self._page = await self._browser.new_page()
         except PlaywrightError as exc:
             raise BrowserActionError(f"Failed to start browser: {exc}") from exc
+        self._browser = await self._open_context()
+        if self._browser.pages:
+            self._page = self._browser.pages[0]
+        else:
+            self._page = await self._browser.new_page()
+        self._attach_diagnostics(self._page)
+
+    def _attach_diagnostics(self, page: Page) -> None:
+        def record(entry: str) -> None:
+            self._diagnostics.append(entry)
+
+        async def on_console(message) -> None:
+            if message.type in ("error", "warning"):
+                record(f"console.{message.type}: {message.text}")
+
+        async def on_page_error(error) -> None:
+            record(f"pageerror: {error}")
+
+        async def on_request_failed(request) -> None:
+            failure = request.failure or "unknown"
+            record(f"requestfailed: {request.url} — {failure}")
+
+        async def on_response(response) -> None:
+            if response.status >= 400:
+                record(f"http {response.status}: {response.url}")
+
+        page.on("console", on_console)
+        page.on("pageerror", on_page_error)
+        page.on("requestfailed", on_request_failed)
+        page.on("response", on_response)
+
+    def get_diagnostics(self) -> list[str]:
+        return list(self._diagnostics)
+
+    def clear_diagnostics(self) -> None:
+        self._diagnostics.clear()
+
+    async def _open_context(self) -> BrowserContext:
+        channel = _resolve_channel(self.channel)
+        try:
+            return await self._launch(channel)
+        except PlaywrightError as exc:
+            if channel is None:
+                raise BrowserActionError(f"Failed to start browser: {exc}") from exc
+            print(
+                f"  ⚠ Google Chrome channel {channel!r} failed "
+                f"({exc}) — falling back to bundled Chromium."
+            )
+            try:
+                return await self._launch(None)
+            except PlaywrightError as fallback_exc:
+                raise BrowserActionError(
+                    f"Failed to start browser: {fallback_exc}"
+                ) from fallback_exc
+
+    async def _launch(self, channel: str | None) -> BrowserContext:
+        return await self._playwright.chromium.launch_persistent_context(
+            USER_DATA_DIR, headless=self.headless, slow_mo=self.slow_mo, channel=channel
+        )
 
     async def close(self) -> None:
         browser, playwright = self._browser, self._playwright
@@ -125,6 +200,7 @@ class BrowserWrapper:
         self._playwright = None
         self._page = None
         self._elements = []
+        self._diagnostics.clear()
         try:
             if browser is not None:
                 try:

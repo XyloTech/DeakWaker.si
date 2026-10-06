@@ -162,6 +162,19 @@ def test_system_rules_forbid_repeat_and_require_absolute_urls():
     assert "must be absolute" in content
 
 
+def test_system_rules_demand_diagnosis_and_real_world_recovery():
+    content = llm.build_messages("g", "obs", [])[0]["content"]
+    assert "Diagnose before retrying" in content
+    assert "console or network errors" in content
+    assert "cookie banners" in content
+
+
+def test_system_rules_limit_ask_user_and_require_verification():
+    content = llm.build_messages("g", "obs", [])[0]["content"]
+    assert "one-time codes" in content
+    assert "Verify the outcome against the goal" in content
+
+
 def test_build_messages_includes_step_budget():
     messages = llm.build_messages("g", "obs", [], steps_used=3, max_steps=15)
     assert messages[-1]["content"] == "Decide the next single action. Steps used: 3/15."

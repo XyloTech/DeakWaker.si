@@ -9,7 +9,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from agent import TurnResult, format_step_line, run_turn
 from browser import BrowserWrapper
-from llm import ActionMessage, ActionParameters
+from llm import ActionMessage, ActionParameters, LLMOutputError, Verdict
 
 FIXTURE_URL = (pathlib.Path(__file__).parent / "fixtures" / "site.html").resolve().as_uri()
 
@@ -21,13 +21,21 @@ def make_action(thought: str, action: str, **params) -> ActionMessage:
 
 
 class ScriptedLLM:
-    def __init__(self, responses: list[ActionMessage]):
+    def __init__(self, responses: list[ActionMessage], verdicts: list[Verdict] | None = None):
         self._responses = list(responses)
+        self._verdicts = list(verdicts) if verdicts is not None else None
         self.calls: list[list[dict]] = []
+        self.verify_calls: list[list[dict]] = []
 
     def next_action(self, messages: list[dict]) -> ActionMessage:
         self.calls.append(messages)
         return self._responses.pop(0)
+
+    def verify(self, messages: list[dict]) -> Verdict:
+        self.verify_calls.append(messages)
+        if self._verdicts is None:
+            return Verdict(complete=True, reason="scripted: goal assumed complete")
+        return self._verdicts.pop(0)
 
 
 def last_blob(call_messages: list[dict]) -> str:
@@ -64,10 +72,11 @@ def test_loop_reaches_done_in_three_steps():
             assert result.status == "done"
             assert result.answer == "Ada typed"
             assert result.steps_used == 3
-            assert len(result.transcript) == 3
+            assert len(result.transcript) == 4
             assert [entry["action"] for entry in result.transcript] == [
                 "click",
                 "type",
+                "verify",
                 "done",
             ]
         finally:
@@ -372,6 +381,9 @@ def test_llm_next_action_runs_off_event_loop():
                     seen_threads.append(threading.get_ident())
                     return make_action("finish", "done", answer="done")
 
+                def verify(self, messages):
+                    return Verdict(complete=True, reason="ok")
+
             await run_turn("Finish", browser, RecordingLLM())
             assert seen_threads and seen_threads[0] != threading.get_ident()
         finally:
@@ -401,7 +413,7 @@ def test_on_step_receives_entry_page_info_and_elements():
                 on_step=lambda entry, page, els: calls.append((entry, page, els)),
             )
             assert result.status == "done"
-            assert [call[0]["step"] for call in calls] == [1, 2]
+            assert [call[0]["step"] for call in calls] == [1, 2, 2]
             assert calls[0][1]["url"] == FIXTURE_URL
             assert calls[0][2] and calls[0][2][0]["index"] == 0
         finally:
@@ -437,6 +449,187 @@ def test_on_confirm_and_on_ask_may_be_async():
             assert result.status == "done"
             assert "USER DECLINED" in result.transcript[0]["result"]
             assert result.transcript[1]["result"] == "hello"
+        finally:
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+def test_done_emits_verify_step_before_done():
+    async def scenario():
+        browser = BrowserWrapper()
+        await browser.start()
+        try:
+            await browser.navigate_to(FIXTURE_URL)
+            llm = ScriptedLLM(
+                [make_action("goal achieved", "done", answer="done")]
+            )
+
+            result = await run_turn("Play a yo yo video", browser, llm)
+
+            assert result.status == "done"
+            assert [entry["action"] for entry in result.transcript] == [
+                "verify",
+                "done",
+            ]
+            verify_entry = result.transcript[0]
+            assert verify_entry["step"] == 1
+            assert verify_entry["result"].startswith("OK · verified")
+            assert len(llm.verify_calls) == 1
+            blob = last_blob(llm.verify_calls[0])
+            assert "Play a yo yo video" in blob
+            assert FIXTURE_URL in blob
+        finally:
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+def test_verifier_rejects_done_and_agent_keeps_going():
+    async def scenario():
+        browser = BrowserWrapper()
+        await browser.start()
+        try:
+            await browser.navigate_to(FIXTURE_URL)
+            llm = ScriptedLLM(
+                [
+                    make_action("I think it is playing", "done", answer="playing"),
+                    make_action("now it is actually playing", "done", answer="playing"),
+                ],
+                verdicts=[
+                    Verdict(complete=False, reason="video never started playing"),
+                    Verdict(complete=True, reason="video is playing"),
+                ],
+            )
+
+            result = await run_turn("Play a yo yo video", browser, llm)
+
+            assert result.status == "done"
+            actions = [entry["action"] for entry in result.transcript]
+            assert actions == ["verify", "verify", "done"]
+            first_verify = result.transcript[0]
+            assert (
+                first_verify["result"]
+                == "ERROR: GOAL NOT COMPLETE — video never started playing"
+            )
+            second_call = last_blob(llm.calls[1])
+            assert "GOAL NOT COMPLETE" in second_call
+            assert "video never started playing" in second_call
+        finally:
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+def test_verifier_error_fails_open_and_accepts_done():
+    async def scenario():
+        browser = BrowserWrapper()
+        await browser.start()
+        try:
+            await browser.navigate_to(FIXTURE_URL)
+
+            class BrokenVerifierLLM(ScriptedLLM):
+                def verify(self, messages):
+                    raise LLMOutputError("LLM API unavailable: verifier down")
+
+            llm = BrokenVerifierLLM(
+                [make_action("finish", "done", answer="done")]
+            )
+
+            result = await run_turn("Anything", browser, llm)
+
+            assert result.status == "done"
+            assert result.answer == "done"
+            assert [entry["action"] for entry in result.transcript] == [
+                "verify",
+                "done",
+            ]
+            assert "verifier unavailable" in result.transcript[0]["result"]
+        finally:
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+def test_verifier_runs_off_event_loop():
+    async def scenario():
+        browser = BrowserWrapper()
+        await browser.start()
+        try:
+            await browser.navigate_to(FIXTURE_URL)
+            seen: list[int] = []
+
+            class ThreadingVerifyLLM(ScriptedLLM):
+                def verify(self, messages):
+                    seen.append(threading.get_ident())
+                    return Verdict(complete=True, reason="ok")
+
+            llm = ThreadingVerifyLLM(
+                [make_action("finish", "done", answer="done")]
+            )
+
+            result = await run_turn("Finish", browser, llm)
+
+            assert result.status == "done"
+            assert seen and seen[0] != threading.get_ident()
+        finally:
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+def test_step_error_appends_recent_browser_diagnostics():
+    async def scenario():
+        browser = BrowserWrapper()
+        await browser.start()
+        try:
+            await browser.navigate_to(FIXTURE_URL)
+            cleared: list[bool] = []
+            browser.get_diagnostics = lambda: [
+                "console.error: kapow",
+                "requestfailed: GET x.png — net::ERR_NAME_NOT_RESOLVED",
+            ]
+            browser.clear_diagnostics = lambda: cleared.append(True)
+            llm = ScriptedLLM(
+                [
+                    make_action("click something missing", "click", element="E42"),
+                    make_action("finish", "done", answer="done"),
+                ]
+            )
+
+            result = await run_turn("Click around", browser, llm)
+
+            assert result.status == "done"
+            blob = last_blob(llm.calls[1])
+            assert "Recent browser errors:" in blob
+            assert "kapow" in blob
+            assert "net::ERR_NAME_NOT_RESOLVED" in blob
+            assert cleared
+        finally:
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+def test_step_error_without_diagnostics_has_no_suffix():
+    async def scenario():
+        browser = BrowserWrapper()
+        await browser.start()
+        try:
+            await browser.navigate_to(FIXTURE_URL)
+            llm = ScriptedLLM(
+                [
+                    make_action("click something missing", "click", element="E42"),
+                    make_action("finish", "done", answer="done"),
+                ]
+            )
+
+            result = await run_turn("Click around", browser, llm)
+
+            assert result.status == "done"
+            blob = last_blob(llm.calls[1])
+            assert "ERROR" in blob
+            assert "Recent browser errors:" not in blob
         finally:
             await browser.close()
 

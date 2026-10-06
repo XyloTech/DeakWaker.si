@@ -11,7 +11,8 @@ from browser import BrowserWrapper
 from config import HEADLESS, MAX_STEPS
 from llm import LLMClient
 
-BRAND = "Developed by Xylotech"
+BRAND = "product of Xylotech"
+DEVELOPER = "Developed by Harshit"
 
 _ACTION_COLORS = {
     "navigate": "36",
@@ -19,6 +20,7 @@ _ACTION_COLORS = {
     "type": "33",
     "scroll": "35",
     "done": "1;32",
+    "verify": "1;35",
     "ask_user": "1;36",
     "error": "1;31",
 }
@@ -65,7 +67,7 @@ def render_banner() -> str:
 
 
 def render_footer() -> str:
-    return _c("2", f"  {BRAND}")
+    return _c("2", f"  {DEVELOPER}")
 
 
 def render_step(entry: dict, page_info: dict, elements: list) -> str:

@@ -27,17 +27,17 @@ The live-LLM test skips unless `LIVE_LLM=1` is set (`LIVE_LLM=1 python -m pytest
 ## Run the agent
 
 1. Ensure Ollama is running (`ollama serve`) and the model is pulled: `ollama pull qwen3:latest`.
-2. Optionally copy `.env.example` to `.env` to override `OLLAMA_HOST`, `MODEL`, `THINKING` (model reasoning; off by default for speed), `HEADLESS`, `USER_DATA_DIR`, or `SLOW_MO_MS`.
+2. Optionally copy `.env.example` to `.env` to override `OLLAMA_HOST`, `MODEL`, `THINKING` (model reasoning; off by default for speed), `HEADLESS`, `USER_DATA_DIR`, `SLOW_MO_MS`, `BROWSER_CHANNEL`, or `AUTO_CONFIRM`.
 3. Run `python chat.py`.
 
-A visible Chromium window opens by default so you can watch every action (`SLOW_MO_MS` defaults to 100 ms of human-like delay per action when headful). Logins/cookies persist across runs in `./user_data/` (gitignored) — sign into a site once in the agent's window and it stays signed in. Set `HEADLESS=1` for invisible runs (required in Codespaces/devcontainer, which have no display).
+A visible window of your installed Google Chrome opens by default so you can watch every action (`BROWSER_CHANNEL=chrome`; it falls back to bundled Chromium if Chrome is missing, and `BROWSER_CHANNEL=none` forces the bundled browser). `SLOW_MO_MS` defaults to 100 ms of human-like delay per action when headful. Logins/cookies persist across runs in `./user_data/` (gitignored) — sign into a site once in the agent's window and it stays signed in. Set `HEADLESS=1` for invisible runs (required in Codespaces/devcontainer, which have no display). Sensitive actions (logins, submits, purchases) auto-approve by default (`AUTO_CONFIRM=1`); set `AUTO_CONFIRM=0` to be asked y/N before each one. When a step fails, the agent is shown recent console/network errors so it can diagnose and recover on its own.
 
 ## Web UI
 
 1. Run `python webui.py` (same setup as the terminal agent).
 2. Open `http://127.0.0.1:8000`, type a goal, and press **Run**.
 
-Every step streams live over SSE (thought, action, result, page state), and confirmation / `ask_user` prompts appear as cards you can answer in-page (Proceed/Decline/Send). Only one goal runs at a time; the terminal REPL (`chat.py`) keeps working as before.
+Every step streams live over SSE (thought, action, result, page state), and `ask_user` prompts appear as cards you can answer in-page (confirmation cards appear only when `AUTO_CONFIRM=0`). Only one goal runs at a time; the terminal REPL (`chat.py`) keeps working as before.
 
 ## Project layout
 

@@ -16,6 +16,14 @@ BACKOFF_BASE_DELAY = 0.5
 DECIDE_PROMPT = "Decide the next single action."
 TRANSPORT_ERROR_PREFIX = "LLM API unavailable"
 
+VERIFY_SYSTEM = (
+    "You are a strict goal-completion verifier for a web agent. You receive the "
+    "user's goal and the current page state, and you decide whether the goal is "
+    "FULLY achieved. Be skeptical: if the required evidence is missing, "
+    "ambiguous, or only partially satisfied, answer complete=false. "
+    "Output ONLY valid JSON: {\"complete\": true|false, \"reason\": \"brief explanation\"}."
+)
+
 SYSTEM_RULES = (
     "- Respond with exactly ONE atomic action per response, as a JSON object with "
     'keys "thought", "action", and "parameters".\n'
@@ -32,6 +40,17 @@ SYSTEM_RULES = (
     "- Never retry an approach that just failed with the same parameters; change strategy "
     "or, if genuinely blocked, use ask_user or done.\n"
     "- Every navigate URL must be absolute, starting with https:// (or another scheme like file://).\n"
+    "- Diagnose before retrying: read the error text and any reported console or "
+    "network errors, reason about the cause, then change strategy.\n"
+    "- Recover independently from real-world issues: cookie banners, popups, "
+    "overlays, redirects, timeouts, and layout changes — try alternate elements "
+    "or scroll to reveal content.\n"
+    "- Handle everyday tasks accurately (search, bookings, shopping, messaging, "
+    "accounts): fill fields carefully and double-check before submitting.\n"
+    "- Use ask_user only for input only a human can supply: one-time codes, "
+    "credentials, payment details, or personal choices.\n"
+    "- Verify the outcome against the goal before calling done, and report "
+    "failures honestly.\n"
 )
 
 
@@ -52,6 +71,11 @@ class ActionMessage(BaseModel):
     thought: str
     action: Literal["navigate", "click", "type", "scroll", "done", "ask_user"]
     parameters: ActionParameters = ActionParameters()
+
+
+class Verdict(BaseModel):
+    complete: bool
+    reason: str = ""
 
 
 def _extract_first_json_block(raw: str) -> str | None:
@@ -94,6 +118,20 @@ def parse_action(raw: str) -> ActionMessage:
         return ActionMessage.model_validate(data)
     except ValidationError as exc:
         raise LLMOutputError(f"Invalid action schema: {exc}") from exc
+
+
+def parse_verdict(raw: str) -> Verdict:
+    try:
+        data = _loads(raw)
+    except LLMOutputError:
+        block = _extract_first_json_block(raw)
+        if block is None:
+            raise
+        data = _loads(block)
+    try:
+        return Verdict.model_validate(data)
+    except ValidationError as exc:
+        raise LLMOutputError(f"Invalid verdict schema: {exc}") from exc
 
 
 def _loads(text: str) -> object:
@@ -181,6 +219,16 @@ def build_messages(
     return messages
 
 
+def build_verify_messages(goal: str, observation: str) -> list[dict]:
+    return [
+        {"role": "system", "content": VERIFY_SYSTEM},
+        {
+            "role": "user",
+            "content": f"Goal: {goal}\n\nCurrent page state:\n{observation}",
+        },
+    ]
+
+
 def _previous_step_failed(messages: list[dict]) -> bool:
     return (
         len(messages) >= 4
@@ -217,9 +265,15 @@ class LLMClient:
         self._complete_fn = complete_fn
 
     def next_action(self, messages: list[dict]) -> ActionMessage:
+        return self._parse_with_repair(messages, parse_action)
+
+    def verify(self, messages: list[dict]) -> Verdict:
+        return self._parse_with_repair(messages, parse_verdict)
+
+    def _parse_with_repair(self, messages: list[dict], parser) -> object:
         raw = self._call_with_backoff(messages)
         try:
-            return parse_action(raw)
+            return parser(raw)
         except LLMOutputError as exc:
             repair_message = {
                 "role": "user",
@@ -227,7 +281,7 @@ class LLMClient:
             }
         raw = self._call_with_backoff([*messages, repair_message])
         try:
-            return parse_action(raw)
+            return parser(raw)
         except LLMOutputError as exc:
             raise LLMOutputError(f"Model output still invalid after repair: {exc}") from exc
 

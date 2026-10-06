@@ -7,6 +7,11 @@ import tempfile
 # headless mode (and therefore slow_mo=0) before config is imported.
 os.environ["HEADLESS"] = "1"
 os.environ["SLOW_MO_MS"] = "0"
+# Tests run on hermetic bundled Chromium, not the machine's real Chrome.
+os.environ["BROWSER_CHANNEL"] = "none"
+# Confirm prompts are disabled by default (AUTO_CONFIRM=1); guardrail tests
+# rely on prompts appearing, so force them back on for the suite.
+os.environ["AUTO_CONFIRM"] = "0"
 # Keep each test run's persistent profile in a throwaway directory so
 # tests neither pollute ./user_data nor share state across runs.
 _test_profile = tempfile.mkdtemp(prefix="desk-waker-test-profile-")

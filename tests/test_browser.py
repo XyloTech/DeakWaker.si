@@ -1,6 +1,7 @@
 import asyncio
 import pathlib
 import sys
+import time
 from contextlib import asynccontextmanager
 from unittest.mock import patch
 
@@ -237,3 +238,125 @@ def test_constructor_explicit_args_win_over_config(monkeypatch):
     wrapper = BrowserWrapper(headless=False, slow_mo=0)
     assert wrapper.headless is False
     assert wrapper.slow_mo == 0
+
+
+def test_resolve_channel_passes_chrome_through():
+    assert browser_mod._resolve_channel("chrome") == "chrome"
+    assert browser_mod._resolve_channel("msedge") == "msedge"
+
+
+def test_resolve_channel_maps_none_tokens_to_no_channel():
+    for token in ("", "none", "off", "bundled"):
+        assert browser_mod._resolve_channel(token) is None
+
+
+def test_constructor_resolves_channel_from_config_at_init(monkeypatch):
+    monkeypatch.setattr(browser_mod, "BROWSER_CHANNEL", "chrome")
+    assert BrowserWrapper().channel == "chrome"
+    monkeypatch.setattr(browser_mod, "BROWSER_CHANNEL", "none")
+    assert BrowserWrapper().channel == "none"
+
+
+def test_constructor_explicit_channel_wins_over_config(monkeypatch):
+    monkeypatch.setattr(browser_mod, "BROWSER_CHANNEL", "chrome")
+    assert BrowserWrapper(channel="msedge").channel == "msedge"
+
+
+def test_launch_falls_back_to_bundled_chromium_when_channel_fails():
+    async def scenario():
+        wrapper = BrowserWrapper(channel="chrome")
+        attempts = []
+
+        class FakeChromium:
+            async def launch_persistent_context(
+                self, user_data_dir, *, headless, slow_mo, channel=None
+            ):
+                attempts.append(channel)
+                if channel == "chrome":
+                    raise PlaywrightError(
+                        "Chromium distribution 'chrome' is not found"
+                    )
+                return "bundled-context"
+
+        wrapper._playwright = type("FakePW", (), {"chromium": FakeChromium()})()
+        context = await wrapper._open_context()
+        assert context == "bundled-context"
+        assert attempts == ["chrome", None]
+
+    asyncio.run(scenario())
+
+
+def test_launch_does_not_fallback_when_channel_unconfigured():
+    async def scenario():
+        wrapper = BrowserWrapper(channel="none")
+
+        class FakeChromium:
+            async def launch_persistent_context(
+                self, user_data_dir, *, headless, slow_mo, channel=None
+            ):
+                raise PlaywrightError("boom")
+
+        wrapper._playwright = type("FakePW", (), {"chromium": FakeChromium()})()
+        with pytest.raises(BrowserActionError, match="Failed to start browser"):
+            await wrapper._open_context()
+
+    asyncio.run(scenario())
+
+
+ERRORS_FIXTURE_URL = (
+    pathlib.Path(__file__).parent / "fixtures" / "errors.html"
+).resolve().as_uri()
+
+
+async def wait_for(predicate, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(0.05)
+    raise AssertionError("condition not met in time")
+
+
+def test_diagnostics_capture_console_page_and_network_errors():
+    async def scenario():
+        async with open_browser() as browser:
+            assert browser.get_diagnostics() == []
+            await browser.navigate_to(ERRORS_FIXTURE_URL)
+            await wait_for(lambda: len(browser.get_diagnostics()) >= 3)
+            await wait_for(
+                lambda: any("pageerror" in d for d in browser.get_diagnostics())
+            )
+            diags = "\n".join(browser.get_diagnostics())
+            assert "console.error" in diags
+            assert "kapow" in diags
+            assert "pageerror" in diags
+            assert "uncaught boom" in diags
+            assert "requestfailed" in diags
+
+    asyncio.run(scenario())
+
+
+def test_diagnostics_buffer_keeps_only_recent_entries():
+    async def scenario():
+        async with open_browser() as browser:
+            await browser.navigate_to("about:blank")
+            for i in range(browser_mod.DIAGNOSTICS_LIMIT + 5):
+                await browser._page.evaluate(f"console.warn('w{i}')")
+            await wait_for(
+                lambda: len(browser.get_diagnostics())
+                == browser_mod.DIAGNOSTICS_LIMIT
+            )
+            assert len(browser.get_diagnostics()) == browser_mod.DIAGNOSTICS_LIMIT
+
+    asyncio.run(scenario())
+
+
+def test_clear_diagnostics_empties_buffer():
+    async def scenario():
+        async with open_browser() as browser:
+            await browser.navigate_to(ERRORS_FIXTURE_URL)
+            await wait_for(lambda: len(browser.get_diagnostics()) > 0)
+            browser.clear_diagnostics()
+            assert browser.get_diagnostics() == []
+
+    asyncio.run(scenario())

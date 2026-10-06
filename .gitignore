@@ -1,5 +1,6 @@
 .superpowers/
 .venv/
+.venv-linux/
 logs/
 __pycache__/
 .pytest_cache/

@@ -97,11 +97,11 @@ def _strip_ansi(text):
 def test_render_banner_shows_branding():
     banner = _strip_ansi(chat.render_banner())
     assert "desk.waker" in banner
-    assert "Developed by Xylotech" in banner
+    assert "product of Xylotech" in banner
 
 
 def test_render_footer_shows_branding():
-    assert "Developed by Xylotech" in _strip_ansi(chat.render_footer())
+    assert "Developed by Harshit" in _strip_ansi(chat.render_footer())
 
 
 def test_render_step_shows_full_process():
@@ -125,6 +125,14 @@ def test_render_step_shows_error_results():
     card = _strip_ansi(chat.render_step(entry, {"url": "about:blank", "title": ""}, []))
     assert "ERROR: stale element" in card
     assert "ERROR" in card
+
+
+def test_render_step_colors_verify_action(monkeypatch):
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    entry = {"step": 4, "thought": "", "action": "verify", "result": "OK · verified"}
+    card = chat.render_step(entry, {"url": "about:blank", "title": ""}, [])
+    assert "\x1b[1;35mVERIFY\x1b[0m" in card
 
 
 def test_render_status_contains_answer():

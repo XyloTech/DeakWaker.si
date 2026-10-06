@@ -59,6 +59,9 @@ class GatedLLM:
         self.release.wait(timeout=10)
         return self._inner._responses.pop(0)
 
+    def verify(self, messages):
+        return self._inner.verify(messages)
+
 
 class FailingLLM:
     def next_action(self, messages):
