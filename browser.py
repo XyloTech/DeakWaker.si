@@ -15,6 +15,7 @@ from config import (
     OBSERVATION_TEXT_LIMIT,
     SLOW_MO_MS,
     USER_DATA_DIR,
+    DOWNLOAD_DIR,
 )
 
 ACTION_TIMEOUT_MS = 3000
@@ -125,6 +126,7 @@ class BrowserWrapper:
         self._page: Page | None = None
         self._pages: list[Page] = []
         self._elements: list[dict] = []
+        self._downloads: list[str] = []
         self._http_status: int | None = None
         self._diagnostics: deque[str] = deque(maxlen=DIAGNOSTICS_LIMIT)
 
@@ -137,6 +139,7 @@ class BrowserWrapper:
             self._playwright = await async_playwright().start()
         except PlaywrightError as exc:
             raise BrowserActionError(f"Failed to start browser: {exc}") from exc
+        Path(DOWNLOAD_DIR).mkdir(parents=True, exist_ok=True)
         self._browser = await self._open_context()
         self._browser.on("page", self._register_page)
         if self._browser.pages:
@@ -178,6 +181,15 @@ class BrowserWrapper:
             request = response.request
             if request.is_navigation_request() and request.frame == page.main_frame:
                 self._http_status = response.status
+
+        async def on_download(download) -> None:
+            path = str(Path(DOWNLOAD_DIR) / Path(download.suggested_filename).name)
+            await download.save_as(path)
+            self._downloads.append(path)
+            if len(self._downloads) > 10:
+                self._downloads = self._downloads[-10:]
+
+        page.on("download", on_download)
 
         page.on("console", on_console)
         page.on("pageerror", on_page_error)
@@ -222,6 +234,7 @@ class BrowserWrapper:
         self._pages = []
         self._elements = []
         self._diagnostics.clear()
+        self._downloads.clear()
         try:
             if browser is not None:
                 try:
@@ -288,6 +301,7 @@ class BrowserWrapper:
             "active_tab": (
                 self._pages.index(self._page) if self._page in self._pages else 0
             ),
+            "recent_downloads": list(self._downloads[-3:]),
         }
 
     async def get_interactive_elements(self) -> list[dict]:

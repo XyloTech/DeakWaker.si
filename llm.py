@@ -1,5 +1,6 @@
 import json
 import time
+from pathlib import Path
 from typing import Callable, Literal
 
 from ollama import Client
@@ -194,6 +195,10 @@ def render_observation(page_info: dict, elements: list[dict]) -> str:
     lines.append("Visible text:")
     text = str(page_info.get("text", ""))[:OBSERVATION_TEXT_LIMIT]
     lines.append(text)
+    recent = page_info.get("recent_downloads", [])
+    if recent:
+        for p in recent:
+            lines.append(f"Downloads: {Path(p).name} → {p}")
     return "\n".join(lines)
 
 

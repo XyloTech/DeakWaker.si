@@ -3,6 +3,7 @@ import http.server
 import pathlib
 import sys
 import time
+import tempfile
 from contextlib import asynccontextmanager
 from unittest.mock import patch
 
@@ -479,6 +480,21 @@ def test_select_option_mismatch_lists_available():
             idx = index_of(browser._elements, selector="#colors")
             with pytest.raises(BrowserActionError, match="available"):
                 await browser.select_option(idx, "nope")
+    asyncio.run(scenario())
+
+
+def test_click_download_is_saved_and_reported(monkeypatch):
+    async def scenario():
+        with tempfile.TemporaryDirectory() as tmp:
+            monkeypatch.setattr(browser_mod, "DOWNLOAD_DIR", tmp)
+            async with serve_fixtures() as origin:
+                async with open_browser() as browser:
+                    await browser.navigate_to(f"{origin}/download.html")
+                    idx = index_of(
+                        await browser.get_interactive_elements(), text="Get it"
+                    )
+                    await browser.click(idx)
+                    await wait_for(lambda: len(browser._downloads) > 0)
     asyncio.run(scenario())
 
 
