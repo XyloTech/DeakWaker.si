@@ -1,12 +1,12 @@
 from playwright.async_api import (
-    Browser,
+    BrowserContext,
     Error as PlaywrightError,
     Page,
     Playwright,
     async_playwright,
 )
 
-from config import HEADLESS, OBSERVATION_TEXT_LIMIT
+from config import HEADLESS, OBSERVATION_TEXT_LIMIT, SLOW_MO_MS, USER_DATA_DIR
 
 ACTION_TIMEOUT_MS = 3000
 NAVIGATE_TIMEOUT_MS = 15000
@@ -92,10 +92,13 @@ class BrowserActionError(Exception):
 
 
 class BrowserWrapper:
-    def __init__(self, *, headless: bool = HEADLESS):
-        self.headless = headless
+    def __init__(
+        self, *, headless: bool | None = None, slow_mo: int | None = None
+    ):
+        self.headless = HEADLESS if headless is None else headless
+        self.slow_mo = SLOW_MO_MS if slow_mo is None else slow_mo
         self._playwright: Playwright | None = None
-        self._browser: Browser | None = None
+        self._browser: BrowserContext | None = None
         self._page: Page | None = None
         self._elements: list[dict] = []
 
@@ -104,8 +107,13 @@ class BrowserWrapper:
             return
         try:
             self._playwright = await async_playwright().start()
-            self._browser = await self._playwright.chromium.launch(headless=self.headless)
-            self._page = await self._browser.new_page()
+            self._browser = await self._playwright.chromium.launch_persistent_context(
+                USER_DATA_DIR, headless=self.headless, slow_mo=self.slow_mo
+            )
+            if self._browser.pages:
+                self._page = self._browser.pages[0]
+            else:
+                self._page = await self._browser.new_page()
         except PlaywrightError as exc:
             raise BrowserActionError(f"Failed to start browser: {exc}") from exc
 

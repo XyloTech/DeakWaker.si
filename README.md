@@ -27,8 +27,10 @@ The live-LLM test skips unless `LIVE_LLM=1` is set (`LIVE_LLM=1 python -m pytest
 ## Run the agent
 
 1. Ensure Ollama is running (`ollama serve`) and the model is pulled: `ollama pull qwen3:latest`.
-2. Optionally copy `.env.example` to `.env` to override `OLLAMA_HOST`, `MODEL`, or `THINKING` (model reasoning; off by default for speed).
+2. Optionally copy `.env.example` to `.env` to override `OLLAMA_HOST`, `MODEL`, `THINKING` (model reasoning; off by default for speed), `HEADLESS`, `USER_DATA_DIR`, or `SLOW_MO_MS`.
 3. Run `python chat.py`.
+
+A visible Chromium window opens by default so you can watch every action (`SLOW_MO_MS` defaults to 100 ms of human-like delay per action when headful). Logins/cookies persist across runs in `./user_data/` (gitignored) — sign into a site once in the agent's window and it stays signed in. Set `HEADLESS=1` for invisible runs (required in Codespaces/devcontainer, which have no display).
 
 ## Web UI
 
