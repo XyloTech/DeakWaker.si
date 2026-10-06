@@ -2,10 +2,297 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>desk.waker</title>
+  <style>
+    :root {
+      --bg: #10141a; --panel: #1a212b; --panel2: #212a36;
+      --text: #dbe4ee; --muted: #8492a6;
+      --accent: #4da3ff; --ok: #43c56b; --err: #ff5d5d; --border: #2c3644;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+      background: var(--bg); color: var(--text); height: 100vh;
+      display: flex; flex-direction: column;
+    }
+    header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 18px; background: var(--panel);
+      border-bottom: 1px solid var(--border);
+    }
+    header h1 { font-size: 16px; margin: 0; letter-spacing: 0.5px; }
+    #status { font-size: 13px; color: var(--muted); font-family: ui-monospace, monospace; }
+    #status.busy { color: var(--accent); }
+    #status.done { color: var(--ok); }
+    #status.error, #status.max_steps { color: var(--err); }
+    main { flex: 1; display: flex; min-height: 0; }
+    #chat-pane {
+      flex: 1.2; display: flex; flex-direction: column;
+      border-right: 1px solid var(--border); min-width: 0;
+    }
+    #feed-pane {
+      flex: 1; display: flex; flex-direction: column;
+      min-width: 0; background: var(--panel);
+    }
+    .pane-title {
+      font-size: 12px; text-transform: uppercase; letter-spacing: 1px;
+      color: var(--muted); padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    #chat, #feed { flex: 1; overflow-y: auto; padding: 14px; }
+    .bubble {
+      max-width: 85%; padding: 9px 12px; border-radius: 12px;
+      margin-bottom: 10px; font-size: 14px; line-height: 1.45;
+      white-space: pre-wrap; word-break: break-word;
+    }
+    .bubble.user {
+      background: var(--accent); color: #06121f;
+      margin-left: auto; border-bottom-right-radius: 3px;
+    }
+    .bubble.assistant {
+      background: var(--panel2); border: 1px solid var(--border);
+      border-bottom-left-radius: 3px;
+    }
+    .step-card {
+      background: var(--panel2); border: 1px solid var(--border);
+      border-radius: 10px; padding: 10px 12px; margin-bottom: 10px;
+      font-size: 13px;
+    }
+    .step-card .head {
+      font-family: ui-monospace, monospace; color: var(--accent); font-weight: 600;
+    }
+    .step-card .thought { color: var(--text); margin-top: 4px; }
+    .step-card .result { margin-top: 4px; font-family: ui-monospace, monospace; }
+    .step-card .result.ok { color: var(--ok); }
+    .step-card .result.err { color: var(--err); }
+    .step-card .page {
+      color: var(--muted); margin-top: 4px; font-size: 12px; word-break: break-all;
+    }
+    #prompt-card {
+      display: none; background: #2a2413; border: 1px solid #8a7429;
+      border-radius: 10px; padding: 12px; margin: 0 14px 14px; font-size: 14px;
+    }
+    #prompt-card.visible { display: block; }
+    #prompt-text { margin-bottom: 10px; white-space: pre-wrap; }
+    #prompt-card button {
+      background: var(--accent); color: #06121f; border: 0; border-radius: 8px;
+      padding: 7px 14px; font-weight: 600; cursor: pointer; margin-right: 8px;
+    }
+    #prompt-card button.secondary {
+      background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    }
+    #prompt-answer {
+      background: var(--bg); border: 1px solid var(--border); color: var(--text);
+      border-radius: 8px; padding: 7px 10px; width: 55%; margin-right: 8px;
+    }
+    footer {
+      display: flex; gap: 10px; padding: 12px 14px;
+      background: var(--panel); border-top: 1px solid var(--border);
+    }
+    #goal-input {
+      flex: 1; background: var(--bg); border: 1px solid var(--border);
+      color: var(--text); border-radius: 10px; padding: 11px 14px; font-size: 14px;
+    }
+    #run-btn {
+      background: var(--accent); color: #06121f; border: 0; border-radius: 10px;
+      padding: 0 22px; font-size: 14px; font-weight: 700; cursor: pointer;
+    }
+    #run-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  </style>
 </head>
 <body>
-  <h1>desk.waker</h1>
-  <p>Web UI coming in the next task.</p>
+  <header>
+    <h1>desk.waker</h1>
+    <span id="status">connecting…</span>
+  </header>
+  <main>
+    <section id="chat-pane">
+      <div class="pane-title">Conversation</div>
+      <div id="chat"></div>
+      <div id="prompt-card">
+        <div id="prompt-text"></div>
+        <div id="prompt-controls-confirm">
+          <button id="prompt-yes" type="button">Proceed (y)</button>
+          <button id="prompt-no" class="secondary" type="button">Decline (n)</button>
+        </div>
+        <div id="prompt-controls-ask" style="display:none">
+          <input id="prompt-answer" type="text" placeholder="Type your reply">
+          <button id="prompt-reply" type="button">Send</button>
+        </div>
+      </div>
+    </section>
+    <section id="feed-pane">
+      <div class="pane-title">Live steps</div>
+      <div id="feed"></div>
+    </section>
+  </main>
+  <footer>
+    <input id="goal-input" type="text" placeholder="Describe your goal…" autocomplete="off">
+    <button id="run-btn" type="button">Run</button>
+  </footer>
+  <script>
+    const statusEl = document.getElementById("status");
+    const chatEl = document.getElementById("chat");
+    const feedEl = document.getElementById("feed");
+    const promptCard = document.getElementById("prompt-card");
+    const promptText = document.getElementById("prompt-text");
+    const promptAnswer = document.getElementById("prompt-answer");
+    const goalInput = document.getElementById("goal-input");
+    const runBtn = document.getElementById("run-btn");
+
+    let pendingPrompt = null;
+
+    function setStatus(text, cls) {
+      statusEl.textContent = text;
+      statusEl.className = cls || "";
+      runBtn.disabled = cls === "busy";
+    }
+
+    function bubble(kind, text) {
+      const div = document.createElement("div");
+      div.className = "bubble " + kind;
+      div.textContent = text;
+      chatEl.appendChild(div);
+      chatEl.scrollTop = chatEl.scrollHeight;
+    }
+
+    function showPrompt(id, kind, text) {
+      pendingPrompt = { id: id, kind: kind };
+      promptText.textContent = text;
+      document.getElementById("prompt-controls-confirm").style.display =
+        kind === "confirm" ? "block" : "none";
+      document.getElementById("prompt-controls-ask").style.display =
+        kind === "ask" ? "block" : "none";
+      promptCard.classList.add("visible");
+    }
+
+    function hidePrompt() {
+      pendingPrompt = null;
+      promptCard.classList.remove("visible");
+      promptAnswer.value = "";
+    }
+
+    async function resync() {
+      try {
+        const response = await fetch("/api/status");
+        const data = await response.json();
+        if (data.running) {
+          setStatus("working…", "busy");
+        } else if (data.last_turn) {
+          setStatus(data.last_turn.status, data.last_turn.status === "done" ? "done" : "error");
+          hidePrompt();
+        } else {
+          setStatus("idle", "");
+        }
+      } catch (err) {
+        setStatus("offline", "busy");
+      }
+    }
+
+    function addStep(e) {
+      const card = document.createElement("div");
+      card.className = "step-card";
+      const head = document.createElement("div");
+      head.className = "head";
+      head.textContent = "Step " + e.n + "/15 | " + e.action;
+      const thought = document.createElement("div");
+      thought.className = "thought";
+      thought.textContent = e.thought.length > 60 ? e.thought.slice(0, 60) : e.thought;
+      const result = document.createElement("div");
+      result.className = "result " + (e.result === "OK" ? "ok" : "err");
+      result.textContent = e.result;
+      const page = document.createElement("div");
+      page.className = "page";
+      page.textContent = e.url + " · " + e.title + " · " + e.element_count + " elements";
+      card.append(head, thought, result, page);
+      feedEl.appendChild(card);
+      feedEl.scrollTop = feedEl.scrollHeight;
+    }
+
+    async function respond(answer) {
+      if (!pendingPrompt) return;
+      const id = pendingPrompt.id;
+      try {
+        const response = await fetch("/api/respond", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: id, answer: answer }),
+        });
+        if (response.ok) hidePrompt();
+      } catch (err) {
+        setStatus("error", "error");
+      }
+    }
+
+    function handle(e) {
+      if (e.type === "turn_started") {
+        feedEl.innerHTML = "";
+        setStatus("working…", "busy");
+        bubble("user", e.goal);
+      } else if (e.type === "step") {
+        addStep(e);
+      } else if (e.type === "confirm") {
+        showPrompt(e.id, "confirm", e.prompt);
+      } else if (e.type === "ask") {
+        showPrompt(e.id, "ask", e.question);
+      } else if (e.type === "turn_finished") {
+        setStatus(e.status, e.status === "done" ? "done" : "error");
+        bubble("assistant", e.status + (e.answer ? "\n" + e.answer : ""));
+        hidePrompt();
+      } else if (e.type === "error") {
+        setStatus("error", "error");
+        bubble("assistant", e.message);
+      }
+    }
+
+    const es = new EventSource("/api/events");
+    es.onopen = resync;
+    es.onerror = resync;
+    es.onmessage = function (event) {
+      handle(JSON.parse(event.data));
+    };
+
+    document.getElementById("prompt-yes").addEventListener("click", function () {
+      respond("y");
+    });
+    document.getElementById("prompt-no").addEventListener("click", function () {
+      respond("n");
+    });
+    document.getElementById("prompt-reply").addEventListener("click", function () {
+      respond(promptAnswer.value);
+    });
+    promptAnswer.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") respond(promptAnswer.value);
+    });
+
+    async function runGoal() {
+      const goal = goalInput.value.trim();
+      if (!goal || runBtn.disabled) return;
+      try {
+        const response = await fetch("/api/goal", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ goal: goal }),
+        });
+        if (response.status === 409) {
+          setStatus("busy — a turn is already running", "busy");
+        } else if (!response.ok) {
+          bubble("assistant", "Could not start: the goal was rejected.");
+        } else {
+          goalInput.value = "";
+        }
+      } catch (err) {
+        setStatus("offline", "busy");
+      }
+    }
+
+    runBtn.addEventListener("click", runGoal);
+    goalInput.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") runGoal();
+    });
+
+    resync();
+  </script>
 </body>
 </html>

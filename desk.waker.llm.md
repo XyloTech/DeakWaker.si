@@ -67,3 +67,6 @@ The agent operates on an **Observe $\rightarrow$ Think $\rightarrow$ Act** feedb
 * **Milestone 2:** Local Llama successfully parses a task and outputs valid JSON action commands. *(Status: Complete ✓)*
 * **Milestone 3:** Closed-loop execution (Llama drives Playwright autonomously for 3+ consecutive steps). *(Status: Complete ✓)*
 * **Milestone 4:** Full chat integration and safety guardrails. *(Status: Complete ✓)*
+* **Milestone 5:** Smarter agent — hardened prompt rules, step-budget coaching, URL normalization; smartness tests green and the YouTube goal ends cleanly with no tracebacks. *(Status: Complete ✓)*
+* **Milestone 6:** Model bake-off executed — `qwen3:latest` wins (3/3 goals) and is the default `MODEL`; report in `docs/superpowers/bench/`. *(Status: Complete ✓)*
+* **Milestone 7:** Web UI live demo (S2: goal entry, SSE step streaming, in-page confirm card) + terminal regression (`chat.py` confirm honored, `Status: done`) + suite green (77 passed, 1 skipped). *(Status: Complete ✓)*

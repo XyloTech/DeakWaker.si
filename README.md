@@ -26,9 +26,16 @@ The live-LLM test skips unless `LIVE_LLM=1` is set (`LIVE_LLM=1 python -m pytest
 
 ## Run the agent
 
-1. Ensure Ollama is running (`ollama serve`) and the model is pulled: `ollama pull llama3.1:8b`.
-2. Optionally copy `.env.example` to `.env` to override `OLLAMA_HOST` or `MODEL`.
+1. Ensure Ollama is running (`ollama serve`) and the model is pulled: `ollama pull qwen3:latest`.
+2. Optionally copy `.env.example` to `.env` to override `OLLAMA_HOST`, `MODEL`, or `THINKING` (model reasoning; off by default for speed).
 3. Run `python chat.py`.
+
+## Web UI
+
+1. Run `python webui.py` (same setup as the terminal agent).
+2. Open `http://127.0.0.1:8000`, type a goal, and press **Run**.
+
+Every step streams live over SSE (thought, action, result, page state), and confirmation / `ask_user` prompts appear as cards you can answer in-page (Proceed/Decline/Send). Only one goal runs at a time; the terminal REPL (`chat.py`) keeps working as before.
 
 ## Project layout
 
@@ -37,6 +44,9 @@ The live-LLM test skips unless `LIVE_LLM=1` is set (`LIVE_LLM=1 python -m pytest
 - `llm.py` — Ollama client: builds prompts, parses and repairs JSON actions.
 - `agent.py` — `run_turn()`: observe–think–act loop with guardrails and logging.
 - `chat.py` — terminal REPL entry point.
+- `webui.py` — FastAPI + SSE web UI entry point.
+- `static/` — web UI frontend (single-page vanilla JS).
+- `tools/model_bench.py` — model bake-off script.
 - `tests/` — unit and integration tests with a static HTML fixture.
 
 ## Specs
