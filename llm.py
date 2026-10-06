@@ -6,6 +6,7 @@ from typing import Callable, Literal
 from ollama import Client
 from pydantic import BaseModel, ValidationError
 
+from actions import ACTIONS
 from config import (
     MAX_HISTORY_STEPS,
     MODEL,
@@ -40,7 +41,6 @@ EXTRACT_SYSTEM = "You extract structured data from web page content. Output ONLY
 SYSTEM_RULES = (
     "- Respond with exactly ONE atomic action per response, as a JSON object with "
     'keys "thought", "action", and "parameters".\n'
-    "- Valid actions: navigate, click, type, scroll, done, ask_user.\n"
     "- Reference elements only by the indices shown in the observation, e.g. [E7]. "
     "Never invent CSS selectors, XPath, or indices that are not in the observation.\n"
     "- Use ask_user when you are blocked and need a decision or information from "
@@ -128,9 +128,14 @@ def parse_action(raw: str) -> ActionMessage:
             raise
         data = _loads(block)
     try:
-        return ActionMessage.model_validate(data)
+        message = ActionMessage.model_validate(data)
     except ValidationError as exc:
         raise LLMOutputError(f"Invalid action schema: {exc}") from exc
+    if message.action not in ACTIONS:
+        raise LLMOutputError(
+            f"Unknown action {message.action!r}; valid: {', '.join(ACTIONS)}"
+        )
+    return message
 
 
 def parse_verdict(raw: str) -> Verdict:
@@ -222,9 +227,13 @@ def render_observation(page_info: dict, elements: list[dict]) -> str:
 
 
 def _system_prompt(goal: str) -> str:
+    actions_block = ""
+    for spec in ACTIONS.values():
+        actions_block += f"  - {spec.name}: {spec.description}\n"
     return (
         "You are a web navigator driving a real browser to achieve the user's goal."
         f"\n\nGoal: {goal}\n\nRules:\n{SYSTEM_RULES}"
+        f"\n- Actions:{actions_block}"
     )
 
 

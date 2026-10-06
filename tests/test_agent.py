@@ -287,17 +287,17 @@ def test_step_budget_sent_to_llm():
     asyncio.run(scenario())
 
 def test_normalize_url_prepends_https_to_bare_hosts():
-    from agent import _normalize_url
-    assert _normalize_url("youtube.com") == "https://youtube.com"
-    assert _normalize_url("localhost:3000") == "https://localhost:3000"
-    assert _normalize_url("www.example.com/path?q=1") == "https://www.example.com/path?q=1"
+    from actions import normalize_url
+    assert normalize_url("youtube.com") == "https://youtube.com"
+    assert normalize_url("localhost:3000") == "https://localhost:3000"
+    assert normalize_url("www.example.com/path?q=1") == "https://www.example.com/path?q=1"
 
 
 def test_normalize_url_keeps_existing_schemes():
-    from agent import _normalize_url
-    assert _normalize_url("https://x.com") == "https://x.com"
-    assert _normalize_url("http://x.com") == "http://x.com"
-    assert _normalize_url("file:///tmp/a.html") == "file:///tmp/a.html"
+    from actions import normalize_url
+    assert normalize_url("https://x.com") == "https://x.com"
+    assert normalize_url("http://x.com") == "http://x.com"
+    assert normalize_url("file:///tmp/a.html") == "file:///tmp/a.html"
 
 
 def test_navigate_normalizes_url_before_dispatch():
