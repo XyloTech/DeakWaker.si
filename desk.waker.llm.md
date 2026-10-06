@@ -63,7 +63,7 @@ The agent operates on an **Observe $\rightarrow$ Think $\rightarrow$ Act** feedb
 ---
 
 ## 4. Milestone Tracker
-* **Milestone 1:** Basic Playwright script successfully navigates and interacts with a test website. *(Status: Pending)*
-* **Milestone 2:** Local Llama successfully parses a task and outputs valid JSON action commands. *(Status: Pending)*
-* **Milestone 3:** Closed-loop execution (Llama drives Playwright autonomously for 3+ consecutive steps). *(Status: Pending)*
-* **Milestone 4:** Full chat integration and safety guardrails. *(Status: Pending)*
+* **Milestone 1:** Basic Playwright script successfully navigates and interacts with a test website. *(Status: Complete ✓)*
+* **Milestone 2:** Local Llama successfully parses a task and outputs valid JSON action commands. *(Status: Complete ✓)*
+* **Milestone 3:** Closed-loop execution (Llama drives Playwright autonomously for 3+ consecutive steps). *(Status: Complete ✓)*
+* **Milestone 4:** Full chat integration and safety guardrails. *(Status: Complete ✓)*
