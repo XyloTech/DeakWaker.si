@@ -23,7 +23,7 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 OLLAMA_HOST: str = _env_str("OLLAMA_HOST", "http://127.0.0.1:11434")
-MODEL: str = _env_str("MODEL", "llama3.1:8b")
+MODEL: str = _env_str("MODEL", "qwen3:latest")
 MAX_STEPS: int = _env_int("MAX_STEPS", 15)
 MAX_HISTORY_STEPS: int = _env_int("MAX_HISTORY_STEPS", 10)
 OBSERVATION_TEXT_LIMIT: int = _env_int("OBSERVATION_TEXT_LIMIT", 2000)
