@@ -8,6 +8,46 @@ from llm import LLMOutputError, TRANSPORT_ERROR_PREFIX, build_messages, render_o
 
 ELEMENT_REF_PATTERN = re.compile(r"^E(\d+)$")
 
+FORM_SUBMIT_WORDS = frozenset(
+    {"submit", "sign in", "log in", "pay", "purchase", "buy", "order", "confirm", "send"}
+)
+PAYMENT_WORDS = frozenset({"pay", "purchase", "buy", "checkout", "price"})
+
+
+def _target_text(action, elements: list[dict]) -> str:
+    index = _parse_element(action.parameters.element)
+    if index is None:
+        return ""
+    for element in elements:
+        if element.get("index") == index:
+            return str(element.get("text", ""))
+    return ""
+
+
+def is_sensitive(action, page_info: dict, elements: list[dict]) -> str | None:
+    if action.action not in ("click", "type"):
+        return None
+    target = _target_text(action, elements).lower()
+    title = str(page_info.get("title", "")).lower()
+
+    if action.action == "click" and target.strip() in FORM_SUBMIT_WORDS:
+        return "form submission"
+
+    if any(word in target for word in PAYMENT_WORDS) or any(
+        word in title for word in PAYMENT_WORDS
+    ):
+        return "purchase"
+
+    if page_info.get("has_password"):
+        if action.action == "type":
+            return "login"
+        if action.action == "click":
+            index = _parse_element(action.parameters.element)
+            for element in elements:
+                if element.get("index") == index and element.get("role") == "password":
+                    return "login"
+    return None
+
 
 @dataclass
 class TurnResult:
@@ -120,10 +160,18 @@ async def run_turn(
 
         index = _parse_element(message.parameters.element)
 
-        # Task 5 guardrail hook: is_sensitive(message, page_info, elements) check
-        # runs here — after element parsing, before dispatch.
-
-        result = await _dispatch(message, browser, on_ask, index)
+        # Guardrail: after element parsing, before dispatch.
+        reason = is_sensitive(message, page_info, elements)
+        if reason is not None:
+            target = _target_text(message, elements) or message.parameters.element or ""
+            prompt = f"⚠ About to: {message.action} {target}. Proceed? [y/N] "
+            approved = on_confirm(prompt) if on_confirm is not None else False
+            if approved:
+                result = await _dispatch(message, browser, on_ask, index)
+            else:
+                result = "ERROR: USER DECLINED this action"
+        else:
+            result = await _dispatch(message, browser, on_ask, index)
         transcript.append(
             {
                 "step": step,
