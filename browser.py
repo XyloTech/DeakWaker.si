@@ -96,9 +96,12 @@ class BrowserWrapper:
     async def start(self) -> None:
         if self._page is not None:
             return
-        self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(headless=self.headless)
-        self._page = await self._browser.new_page()
+        try:
+            self._playwright = await async_playwright().start()
+            self._browser = await self._playwright.chromium.launch(headless=self.headless)
+            self._page = await self._browser.new_page()
+        except PlaywrightError as exc:
+            raise BrowserActionError(f"Failed to start browser: {exc}") from exc
 
     async def close(self) -> None:
         browser, playwright = self._browser, self._playwright
@@ -122,15 +125,18 @@ class BrowserWrapper:
 
     async def get_page_info(self) -> dict:
         page = self._require_page()
-        info = await page.evaluate(
-            """() => ({
-                url: window.location.href,
-                title: document.title,
-                text: document.body ? document.body.innerText : '',
-                has_password:
-                    document.querySelector('input[type="password"]') !== null,
-            })"""
-        )
+        try:
+            info = await page.evaluate(
+                """() => ({
+                    url: window.location.href,
+                    title: document.title,
+                    text: document.body ? document.body.innerText : '',
+                    has_password:
+                        document.querySelector('input[type="password"]') !== null,
+                })"""
+            )
+        except PlaywrightError as exc:
+            raise BrowserActionError(f"Failed to read page info: {exc}") from exc
         return {
             "url": str(info["url"]),
             "title": str(info["title"]),
@@ -140,7 +146,12 @@ class BrowserWrapper:
 
     async def get_interactive_elements(self) -> list[dict]:
         page = self._require_page()
-        collected = await page.evaluate(_COLLECT_ELEMENTS_JS)
+        try:
+            collected = await page.evaluate(_COLLECT_ELEMENTS_JS)
+        except PlaywrightError as exc:
+            raise BrowserActionError(
+                f"Failed to observe interactive elements: {exc}"
+            ) from exc
         self._elements = [
             {
                 "index": index,
@@ -187,19 +198,25 @@ class BrowserWrapper:
         step = {"down": SCROLL_STEP_PX, "up": -SCROLL_STEP_PX}.get(direction)
         if step is None:
             raise BrowserActionError(f"Unknown scroll direction: {direction!r}")
-        await page.evaluate("step => window.scrollBy(0, step)", step)
+        try:
+            await page.evaluate("step => window.scrollBy(0, step)", step)
+        except PlaywrightError as exc:
+            raise BrowserActionError(f"Failed to scroll: {exc}") from exc
 
     async def get_scroll_position(self) -> dict:
         page = self._require_page()
-        position = await page.evaluate(
-            """() => ({
-                y: Math.round(window.scrollY),
-                max: Math.max(
-                    0,
-                    document.documentElement.scrollHeight - window.innerHeight
-                ),
-            })"""
-        )
+        try:
+            position = await page.evaluate(
+                """() => ({
+                    y: Math.round(window.scrollY),
+                    max: Math.max(
+                        0,
+                        document.documentElement.scrollHeight - window.innerHeight
+                    ),
+                })"""
+            )
+        except PlaywrightError as exc:
+            raise BrowserActionError(f"Failed to read scroll position: {exc}") from exc
         return {"y": int(position["y"]), "max": int(position["max"])}
 
     async def take_screenshot(self, path: str) -> None:

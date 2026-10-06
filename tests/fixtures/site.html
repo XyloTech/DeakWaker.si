@@ -28,6 +28,9 @@
     <div>Fixture pages used in automated tests stay small and deterministic, with just enough filler text to force a scrollbar into existence and exercise the scroll position measurement code paths.</div>
     <div>Every assertion in the suite maps directly to a requirement from the task brief, keeping the tests honest and free of accidental coverage that would pass even if the implementation were broken.</div>
     <div>When the suite passes on a clean checkout, the foundation is considered ready for the planner and executor tasks that build on top of this browser wrapper in the milestones that follow it.</div>
+    <div>Errors raised across the wrapper boundary stay typed as action failures, so callers can branch on them without importing the browser library or catching broad low level exceptions themselves.</div>
+    <div>Each observation refreshes the dispatch table from scratch, which keeps indices aligned with the current document and lets stale lookups fail fast instead of acting on the wrong node by accident.</div>
+    <div>Observers record roles, short labels, and stable selectors for every visible control, giving the planning model a compact but sufficient description of what can be clicked or typed into next.</div>
   </div>
   <div id="dest">Destination</div>
   <script>

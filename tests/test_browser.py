@@ -2,8 +2,10 @@ import asyncio
 import pathlib
 import sys
 from contextlib import asynccontextmanager
+from unittest.mock import patch
 
 import pytest
+from playwright.async_api import Error as PlaywrightError, Page
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
@@ -126,5 +128,20 @@ def test_close_is_idempotent():
         await browser.start()
         await browser.close()
         await browser.close()
+
+    asyncio.run(scenario())
+
+
+def test_observe_wraps_playwright_error():
+    async def scenario():
+        async with open_browser() as browser:
+            await browser.navigate_to(FIXTURE_URL)
+            with patch.object(
+                Page,
+                "evaluate",
+                side_effect=PlaywrightError("Execution context was destroyed"),
+            ):
+                with pytest.raises(BrowserActionError):
+                    await browser.get_interactive_elements()
 
     asyncio.run(scenario())
