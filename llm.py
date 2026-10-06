@@ -2,9 +2,19 @@ import json
 import time
 from typing import Callable, Literal
 
+from ollama import Client
 from pydantic import BaseModel, ValidationError
 
-from config import MAX_HISTORY_STEPS, MODEL, OBSERVATION_TEXT_LIMIT, OLLAMA_HOST, THINKING
+from config import (
+    MAX_HISTORY_STEPS,
+    MODEL,
+    OBSERVATION_TEXT_LIMIT,
+    OLLAMA_HOST,
+    OLLAMA_NUM_CTX,
+    OLLAMA_TEMPERATURE,
+    OLLAMA_TIMEOUT_S,
+    THINKING,
+)
 
 REPAIR_PROMPT = (
     "Your last output was invalid: {error}. "
@@ -240,13 +250,12 @@ def _previous_step_failed(messages: list[dict]) -> bool:
 def _chat_kwargs(model: str, messages: list[dict]) -> dict:
     kwargs: dict = {"model": model, "messages": messages, "format": "json"}
     kwargs["think"] = THINKING or _previous_step_failed(messages)
+    kwargs["options"] = {"temperature": OLLAMA_TEMPERATURE, "num_ctx": OLLAMA_NUM_CTX}
     return kwargs
 
 
-def _ollama_complete(host: str, model: str, messages: list[dict]) -> str:
-    from ollama import Client
-
-    response = Client(host=host).chat(**_chat_kwargs(model, messages))
+def _ollama_complete(host: str, model: str, messages: list[dict], timeout: float) -> str:
+    response = Client(host=host, timeout=timeout).chat(**_chat_kwargs(model, messages))
     return str(response["message"]["content"])
 
 
@@ -256,12 +265,14 @@ class LLMClient:
         *,
         host: str = OLLAMA_HOST,
         model: str = MODEL,
+        timeout: float | None = None,
         complete_fn: Callable[[list[dict]], str] | None = None,
     ):
         self.host = host
         self.model = model
+        self.timeout = OLLAMA_TIMEOUT_S if timeout is None else timeout
         if complete_fn is None:
-            complete_fn = lambda msgs: _ollama_complete(host, model, msgs)
+            complete_fn = lambda msgs: _ollama_complete(host, model, msgs, self.timeout)
         self._complete_fn = complete_fn
 
     def next_action(self, messages: list[dict]) -> ActionMessage:

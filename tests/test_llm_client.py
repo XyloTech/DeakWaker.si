@@ -113,7 +113,9 @@ def test_next_action_backoff_recovers(monkeypatch):
 def test_default_client_completes_via_ollama(monkeypatch):
     captured: dict = {}
 
-    def fake_complete(host: str, model: str, messages: list[dict]) -> str:
+    def fake_complete(
+        host: str, model: str, messages: list[dict], timeout: float
+    ) -> str:
         captured.update(host=host, model=model, messages=messages)
         return json.dumps(VALID_PAYLOAD)
 
@@ -127,6 +129,27 @@ def test_default_client_completes_via_ollama(monkeypatch):
     assert captured["host"] == llm.OLLAMA_HOST
     assert captured["model"] == llm.MODEL
     assert captured["messages"][0] == {"role": "system", "content": "sys"}
+
+
+def test_ollama_complete_passes_timeout_and_options(monkeypatch):
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, *, host, timeout):
+            captured.update(host=host, timeout=timeout)
+        def chat(self, **kwargs):
+            captured["kwargs"] = kwargs
+            return {"message": {"content": json.dumps(VALID_PAYLOAD)}}
+
+    monkeypatch.setattr(llm, "Client", FakeClient)
+    monkeypatch.setattr(llm, "OLLAMA_TIMEOUT_S", 42.0)
+    monkeypatch.setattr(llm, "OLLAMA_TEMPERATURE", 0.7)
+    monkeypatch.setattr(llm, "OLLAMA_NUM_CTX", 8192)
+    client = llm.LLMClient()
+    result = client.next_action([{"role": "user", "content": "x"}])
+    assert result.action == "navigate"
+    assert captured["timeout"] == 42.0
+    assert captured["kwargs"]["options"] == {"temperature": 0.7, "num_ctx": 8192}
 
 
 @pytest.mark.live
@@ -243,6 +266,13 @@ def test_chat_kwargs_stays_fast_on_first_step(monkeypatch):
     monkeypatch.setattr(llm, "THINKING", False)
     kwargs = llm._chat_kwargs("qwen3:latest", build_messages("g", "obs", []))
     assert kwargs["think"] is False
+
+
+def test_chat_kwargs_include_temperature_and_context(monkeypatch):
+    monkeypatch.setattr(llm, "OLLAMA_TEMPERATURE", 0.7)
+    monkeypatch.setattr(llm, "OLLAMA_NUM_CTX", 8192)
+    kwargs = llm._chat_kwargs("qwen3:latest", [{"role": "user", "content": "hi"}])
+    assert kwargs["options"] == {"temperature": 0.7, "num_ctx": 8192}
 
 
 def test_decide_prompt_nudges_after_failed_step():
