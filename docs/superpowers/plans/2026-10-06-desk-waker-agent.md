@@ -12,17 +12,17 @@
 
 ## Global Constraints
 
-- Dependencies: ONLY `playwright`, `groq`, `pydantic`, `python-dotenv` (plus `pytest` for tests)
-- LLM backend: Groq API only, default model `llama-3.3-70b-versatile` (env-overridable); no Ollama
+- Dependencies: ONLY `playwright`, `ollama`, `pydantic`, `python-dotenv` (plus `pytest` for tests)
+- LLM backend: local Ollama ONLY (user directive 2026-10-06, supersedes the original Groq constraint), default model `llama3.1:8b` (env-overridable via `MODEL`); `OLLAMA_HOST` default `http://127.0.0.1:11434`; no API keys anywhere
 - Interface: terminal REPL only; no Streamlit/web UI
 - `max_steps` default: 15 (overridable per call); observation visible text capped at 2000 chars
 - Element references in observations: `[E0] role "text"` format; LLM output `parameters.element` is that index string (e.g. `"E7"`)
 - Sensitive keywords (exact): button text ∈ {submit, sign in, log in, pay, purchase, buy, order, confirm, send}; payment keywords ∈ {pay, purchase, buy, checkout, price}; password field + click/type = login
 - Confirmation default: **N** (decline when no `on_confirm` supplied); decline feeds `ERROR: USER DECLINED this action` back to the LLM
-- Groq transport failure: exponential backoff ×2 (3 attempts total), then abort turn with a clear message
+- LLM transport failure (Ollama unreachable, model missing): exponential backoff ×2 (3 attempts total), then abort turn with a clear message
 - Transcripts: `logs/session-<timestamp>.jsonl`; one console line per step: `Step n/max | action | thought`
 - No exception reaches the user as a traceback (spec §7)
-- Live-Groq tests are manual/optional — excluded from default `pytest` run
+- Live-LLM tests are manual/optional — `live` marker + `LIVE_LLM=1` opt-in, excluded from default `pytest` run
 - Platform: Windows/PowerShell; all commands must run in PowerShell
 - Devcontainer (Task 7): image `mcr.microsoft.com/devcontainers/python:1-3.11`, feature `ghcr.io/devcontainers/features/playwright:1`, `postCreateCommand: pip install -r requirements.txt && playwright install chromium`, `remoteUser: vscode` — exact values from `docs/superpowers/specs/2026-10-06-desk-waker-devcontainer-design.md`; no Dockerfile, no compose
 
@@ -206,6 +206,55 @@ git add llm.py tests/test_llm_client.py pytest.ini; git commit -m "feat: prompt 
 
 ---
 
+### Task 3b: Ollama transport (replaces Groq) — plan amendment 2026-10-06
+
+> Added after Task 3 by user directive: local Ollama, no API. Supersedes the plan's original Groq-only constraint; spec §1–§6 amended to match.
+
+**Files:**
+- Modify: `config.py`, `llm.py`, `requirements.txt`, `.env.example`, `pytest.ini`, `README.md`
+- Modify: `tests/test_llm_client.py`
+
+**Interfaces:**
+- Consumes: `LLMClient` from Tasks 2–3; `config.MODEL`
+- Produces:
+  - `config.OLLAMA_HOST: str` — env `OLLAMA_HOST`, default `"http://127.0.0.1:11434"`; `config.MODEL` default `"llama3.1:8b"`; `GROQ_API_KEY` removed
+  - `def _ollama_complete(host: str, model: str, messages: list[dict]) -> str` — lazy `from ollama import Client`; `Client(host=host).chat(model=model, messages=messages, format="json")`; returns `response["message"]["content"]`
+  - `LLMClient.__init__(*, host: str = OLLAMA_HOST, model: str = MODEL, complete_fn: Callable[[list[dict]], str] | None = None)` — `api_key` removed; when `complete_fn is None` the default transport is `lambda msgs: _ollama_complete(host, model, msgs)` resolved via module globals at call time (monkeypatchable)
+  - Backoff + repair behavior unchanged from Task 3
+  - `requirements.txt`: `groq` line replaced by `ollama`; `.env.example`: `OLLAMA_HOST=` and `MODEL=llama3.1:8b`; `pytest.ini` marker text updated to Ollama/`LIVE_LLM`; README Groq references → Ollama
+
+- [ ] **Step 1: Write the failing tests in `tests/test_llm_client.py`**
+
+- `test_default_client_completes_via_ollama` — `monkeypatch.setattr(llm, "_ollama_complete", fake)` where `fake(host, model, messages)` records args and returns valid JSON payload; `LLMClient().next_action([{"role": "system", "content": "sys"}])` returns `ActionMessage`; recorded `host == config.OLLAMA_HOST`, `model == config.MODEL`
+- Rewrite `test_next_action_live_smoke` — keep `@pytest.mark.live`; change skip guard to `@pytest.mark.skipif(not os.getenv("LIVE_LLM"), reason="LIVE_LLM not set")`; real `LLMClient()` against running Ollama; same `navigate` assertion
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `.venv\Scripts\python.exe -m pytest tests/test_llm_client.py -v`
+Expected: FAIL — `AttributeError: ... has no attribute '_ollama_complete'` (or import of removed symbol), live test SKIPPED
+
+- [ ] **Step 3: Implement config + transport swap; update dependency/docs files**
+
+`config.py`: drop `GROQ_API_KEY`, add `OLLAMA_HOST`, change `MODEL` default. `llm.py`: replace Groq client block with `_ollama_complete` + `LLMClient(host=..., model=...)`. Update `requirements.txt`, `.env.example`, `pytest.ini`, `README.md`.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `.venv\Scripts\python.exe -m pytest tests/test_llm_client.py -v`
+Expected: all PASS, live SKIPPED
+
+- [ ] **Step 5: Run the full suite**
+
+Run: `.venv\Scripts\python.exe -m pytest -v`
+Expected: all PASS (Tasks 1–3 tests unaffected), live SKIPPED
+
+- [ ] **Step 6: Commit**
+
+```powershell
+git add -A; git commit -m "feat: ollama local transport replaces groq backend"
+```
+
+---
+
 ### Task 4: Agent loop — observe/think/act (Milestone 3)
 
 **Files:**
@@ -343,8 +392,8 @@ Expected: all PASS
 
 - [ ] **Step 5: Full suite + manual Milestone-4 smoke**
 
-Run: `pytest -v` → all PASS, live SKIPPED.
-Manual (with `GROQ_API_KEY` in `.env`): `python chat.py`, run goal `Open example.com and tell me the page heading` → observe ≥3 step lines, `done` with correct heading; run a goal ending in a form submit on a test site → confirmation prompt appears, answer `N` → agent adapts. Check `logs/session-*.jsonl` written.
+Run: `.venv\Scripts\python.exe -m pytest -v` → all PASS, live SKIPPED.
+Manual (Ollama running locally, `llama3.1:8b` pulled): `python chat.py`, run goal `Open example.com and tell me the page heading` → observe ≥3 step lines, `done` with correct heading; run a goal ending in a form submit on a test site → confirmation prompt appears, answer `N` → agent adapts. Check `logs/session-*.jsonl` written. Live LLM test: `LIVE_LLM=1 .venv\Scripts\python.exe -m pytest -m live -v`.
 
 - [ ] **Step 6: Mark milestones + commit**
 

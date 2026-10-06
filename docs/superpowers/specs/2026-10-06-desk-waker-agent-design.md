@@ -3,33 +3,34 @@
 **Date:** 2026-10-06
 **Source blueprint:** `desk.waker.llm.md`
 **Status:** Approved (design reviewed section-by-section, 2026-10-06)
+**Amended 2026-10-06:** LLM backend switched from Groq API to local Ollama per user directive ("use local llm ollama, not an API"). All Groq references below updated; behavior otherwise unchanged.
 
 ## 1. Intent
 
-Build a Python agent that accepts natural-language goals in a terminal chat and executes multi-step browser tasks autonomously via an Observe → Think → Act loop: Playwright observes and acts, a Llama LLM on Groq decides the next atomic action as structured JSON.
+Build a Python agent that accepts natural-language goals in a terminal chat and executes multi-step browser tasks autonomously via an Observe → Think → Act loop: Playwright observes and acts, a Llama LLM on local Ollama decides the next atomic action as structured JSON.
 
 **Success = all four blueprint milestones pass:** Playwright interaction works, LLM emits valid JSON actions, 3+ autonomous closed-loop steps, chat + guardrails functional.
 
 **Stated constraints (user decisions):**
-- Groq API is the primary (only) LLM backend — no Ollama abstraction in v1
+- Local Ollama is the only LLM backend (user directive 2026-10-06; supersedes the original Groq decision) — no cloud API keys
 - Terminal chat only; Streamlit deferred to a later iteration
 - Element targeting via numbered interactive-element map — LLM never invents CSS selectors
 - Confirmations only before sensitive actions (logins, form submissions, purchases); other actions auto-run
 
-**Out of scope (YAGNI):** FastAPI/web transport, vision screenshots, Ollama fallback, multi-tab handling, downloads, browser extensions.
+**Out of scope (YAGNI):** FastAPI/web transport, vision screenshots, cloud-API fallback, multi-tab handling, downloads, browser extensions.
 
 ## 2. Architecture (Approach 1 — modular package, single asyncio run)
 
 ```
 desk.waker/
 ├── desk.waker.llm.md          # existing blueprint
-├── requirements.txt           # playwright, groq, pydantic, python-dotenv
-├── .env.example               # GROQ_API_KEY=
+├── requirements.txt           # playwright, ollama, pydantic, python-dotenv
+├── .env.example               # OLLAMA_HOST=, MODEL=llama3.1:8b
 ├── config.py                  # model name, max_steps=15, timeouts, headless flag
 ├── browser.py                 # BrowserWrapper class (async Playwright)
 │     navigate_to / click / type_text / scroll / extract_page_content /
 │     take_screenshot / get_interactive_elements() -> {index, role, text, selector}
-├── llm.py                     # Groq client; build prompt, parse + repair JSON
+├── llm.py                     # Ollama client; build prompt, parse + repair JSON
 ├── agent.py                   # run_turn(goal, on_confirm) — loop, guardrails, logging
 ├── chat.py                    # terminal REPL (entry point)
 ├── logs/                      # session-<timestamp>.jsonl transcripts
@@ -44,11 +45,11 @@ desk.waker/
 
 **Boundaries:**
 - `browser.py` is the only module importing Playwright; all other modules consume plain dicts/strings
-- `llm.py` is the only module importing `groq`; accepts injected client for tests
+- `llm.py` is the only module importing `ollama`; accepts injected client for tests
 - `agent.py` exposes one entry point: `run_turn(goal, on_confirm=callable) -> TurnResult`
 - One browser/page instance persists across turns within a chat session (cookies retained)
 
-**Dependencies:** `playwright`, `groq`, `pydantic`, `python-dotenv` — nothing else.
+**Dependencies:** `playwright`, `ollama`, `pydantic`, `python-dotenv` — nothing else.
 
 ## 3. Data Flow (agent loop)
 
@@ -94,7 +95,7 @@ All parameters optional; validation failure triggers the repair path.
 
 **System prompt sections:** (1) role as web navigator, (2) fixed user goal, (3) rules — one atomic action per response, reference element indices only, never invent selectors, `ask_user` when blocked, `done` only when goal verifiably achieved, (4) observation block (URL/title, element list, text excerpt), (5) recent history.
 
-**Groq:** model `llama-3.3-70b-versatile` (overridable in `config.py`), `response_format={"type": "json_object"}` with parse fallback.
+**Ollama:** model `llama3.1:8b` (overridable via `MODEL` in `config.py`), host `OLLAMA_HOST` default `http://127.0.0.1:11434`, `format="json"` on `chat` with parse fallback.
 
 **Repair path:** invalid output → resend with pydantic error message and instruction to output only valid JSON → one retry → step fails with `ERROR` to loop.
 
@@ -114,7 +115,7 @@ All parameters optional; validation failure triggers the repair path.
 |---|---|
 | Playwright timeout | `ERROR: timed out` to LLM; step counts |
 | Invalid/stale element index | re-observe before dispatch; else `ERROR` to LLM |
-| Groq API error | exponential backoff ×2, then abort turn with message |
+| Ollama unreachable / model missing | exponential backoff ×2, then abort turn with message |
 | Unparseable JSON after repair | `ERROR` to LLM; step counts |
 | max_steps=15 exhausted | stop; report steps + best-so-far status |
 | Browser crash/page closed | abort cleanly, close session, tell user to restart |
@@ -129,9 +130,9 @@ All parameters optional; validation failure triggers the repair path.
 | `test_llm_parse.py` | JSON repair: valid, fenced, trailing prose, truncated, bad enum | neither API nor browser |
 | `test_browser.py` | element-map indices, click/type/navigate vs static fixture | Playwright headless |
 | `test_agent.py` | scripted fake LLM + real headless browser: dispatch order, confirmation trigger, ask_user suspension, max-steps, done | Playwright headless |
-| Manual smoke | one live Groq end-to-end run on a simple site | API key |
+| Manual smoke | one live Ollama end-to-end run on a simple site | local Ollama running |
 
-Live-Groq tests are manual/optional — excluded from default `pytest`.
+Live-LLM tests (`live` marker, opt-in via `LIVE_LLM=1`) are manual/optional — excluded from default `pytest`.
 
 **Milestone mapping:** M1 = `test_browser.py`; M2 = `test_llm_parse.py` + live parse; M3 = `test_agent.py` + live multi-step run; M4 = REPL end-to-end + observed confirmation prompt.
 
