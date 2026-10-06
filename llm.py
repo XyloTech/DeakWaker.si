@@ -4,7 +4,7 @@ from typing import Callable, Literal
 
 from pydantic import BaseModel, ValidationError
 
-from config import MAX_HISTORY_STEPS, MODEL, OBSERVATION_TEXT_LIMIT, OLLAMA_HOST
+from config import MAX_HISTORY_STEPS, MODEL, OBSERVATION_TEXT_LIMIT, OLLAMA_HOST, THINKING
 
 REPAIR_PROMPT = (
     "Your last output was invalid: {error}. "
@@ -175,10 +175,17 @@ def build_messages(
     return messages
 
 
+def _chat_kwargs(model: str, messages: list[dict]) -> dict:
+    kwargs: dict = {"model": model, "messages": messages, "format": "json"}
+    if not THINKING:
+        kwargs["think"] = False
+    return kwargs
+
+
 def _ollama_complete(host: str, model: str, messages: list[dict]) -> str:
     from ollama import Client
 
-    response = Client(host=host).chat(model=model, messages=messages, format="json")
+    response = Client(host=host).chat(**_chat_kwargs(model, messages))
     return str(response["message"]["content"])
 
 

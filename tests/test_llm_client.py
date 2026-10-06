@@ -188,3 +188,21 @@ def test_decide_prompt_silent_on_single_failure():
     history = [{"thought": "", "action": "navigate", "result": "ERROR: x"}]
     prompt = llm.decide_prompt(4, 15, history)
     assert "repeated a failed approach" not in prompt
+
+def test_chat_kwargs_disables_thinking_by_default(monkeypatch):
+    monkeypatch.setattr(llm, "THINKING", False)
+    kwargs = llm._chat_kwargs("qwen3:latest", [{"role": "user", "content": "hi"}])
+    assert kwargs["think"] is False
+    assert kwargs["format"] == "json"
+
+
+def test_chat_kwargs_keeps_thinking_when_enabled(monkeypatch):
+    monkeypatch.setattr(llm, "THINKING", True)
+    kwargs = llm._chat_kwargs("qwen3:latest", [{"role": "user", "content": "hi"}])
+    assert "think" not in kwargs
+
+
+def test_chat_kwargs_omits_think_for_truncation_control(monkeypatch):
+    monkeypatch.setattr(llm, "THINKING", False)
+    kwargs = llm._chat_kwargs("qwen3:latest", [{"role": "user", "content": "hi"}])
+    assert "num_predict" not in kwargs
