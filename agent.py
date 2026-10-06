@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import re
 from dataclasses import dataclass
 from typing import Callable
@@ -129,6 +130,8 @@ async def _dispatch(
         elif message.action == "ask_user":
             question = params.question or ""
             reply = on_ask(question) if on_ask is not None else ""
+            if inspect.isawaitable(reply):
+                reply = await reply
             return str(reply)
         else:
             return f"ERROR: unknown action {message.action!r}"
@@ -219,6 +222,8 @@ async def run_turn(
             target = _target_text(message, elements) or message.parameters.element or ""
             prompt = f"⚠ About to: {message.action} {target}. Proceed? [y/N] "
             approved = on_confirm(prompt) if on_confirm is not None else False
+            if inspect.isawaitable(approved):
+                approved = await approved
             if approved:
                 result = await _dispatch(message, browser, on_ask, index, expected, elements)
             else:
