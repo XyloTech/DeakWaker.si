@@ -1,0 +1,7 @@
+playwright
+groq
+pydantic
+python-dotenv
+
+# dev-only
+pytest

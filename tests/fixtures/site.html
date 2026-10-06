@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Fixture Page</title>
+</head>
+<body>
+  <h1>Fixture</h1>
+  <button id="go">Go</button>
+  <div id="out"></div>
+  <p>
+    <label for="name">Name</label>
+    <input id="name" type="text" placeholder="Your name">
+  </p>
+  <form id="login">
+    <input type="password" id="pw" placeholder="Password">
+    <button type="submit">Submit</button>
+  </form>
+  <p><a id="plain" href="#dest">Plain Link</a></p>
+  <div id="filler" style="max-width: 460px;">
+    <div>The quick brown fox jumps over the lazy dog while the autonomous agent watches the page update in real time and waits patiently for the next observation to arrive from the browser session it controls.</div>
+    <div>Autonomous browsing requires careful bookkeeping of interactive elements so that every click and keystroke lands on exactly the intended target node, even after the document has been mutated by scripts.</div>
+    <div>A dispatch table maps stable integer indices to CSS selectors, letting the language model reason about page actions using simple numbers instead of raw markup fragments that change between renders.</div>
+    <div>Stale entries are expected whenever the document mutates, so the wrapper must translate missing nodes into a clear and recoverable action error that the planner can react to on the following step.</div>
+    <div>Scrolling the viewport exposes content that sits below the initial fold, and the agent reads the resulting scroll position to decide whether more movement is needed before extracting the page text.</div>
+    <div>Screenshots provide a compact visual record of progress that can be stored alongside text logs for later debugging and review by a human operator who was not present during the original run.</div>
+    <div>Configuration values such as model name, step limits, and headless mode come from environment variables so that deployments can vary behaviour without editing source code or rebuilding anything.</div>
+    <div>Fixture pages used in automated tests stay small and deterministic, with just enough filler text to force a scrollbar into existence and exercise the scroll position measurement code paths.</div>
+    <div>Every assertion in the suite maps directly to a requirement from the task brief, keeping the tests honest and free of accidental coverage that would pass even if the implementation were broken.</div>
+    <div>When the suite passes on a clean checkout, the foundation is considered ready for the planner and executor tasks that build on top of this browser wrapper in the milestones that follow it.</div>
+  </div>
+  <div id="dest">Destination</div>
+  <script>
+    document.getElementById('go').addEventListener('click', function () {
+      var p = document.createElement('p');
+      p.id = 'clicked';
+      p.textContent = 'Clicked';
+      document.getElementById('out').appendChild(p);
+    });
+  </script>
+</body>
+</html>
