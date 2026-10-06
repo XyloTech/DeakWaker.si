@@ -14,6 +14,7 @@ REPAIR_PROMPT = (
 BACKOFF_ATTEMPTS = 3
 BACKOFF_BASE_DELAY = 0.5
 DECIDE_PROMPT = "Decide the next single action."
+TRANSPORT_ERROR_PREFIX = "LLM API unavailable"
 
 SYSTEM_RULES = (
     "- Respond with exactly ONE atomic action per response, as a JSON object with "
@@ -188,7 +189,7 @@ class LLMClient:
                 if attempt < BACKOFF_ATTEMPTS - 1:
                     time.sleep(delay)
                     delay *= 2
-        raise LLMOutputError(f"LLM API unavailable: {last_error}") from last_error
+        raise LLMOutputError(f"{TRANSPORT_ERROR_PREFIX}: {last_error}") from last_error
 
     def _complete(self, messages: list[dict]) -> str:
         return self._complete_fn(messages)
