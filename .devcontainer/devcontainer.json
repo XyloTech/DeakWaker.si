@@ -1,0 +1,9 @@
+{
+  "name": "desk.waker",
+  "image": "mcr.microsoft.com/devcontainers/python:1-3.11",
+  "features": {
+    "ghcr.io/devcontainers/features/playwright:1": {}
+  },
+  "postCreateCommand": "pip install -r requirements.txt && playwright install chromium",
+  "remoteUser": "vscode"
+}
