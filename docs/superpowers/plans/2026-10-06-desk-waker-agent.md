@@ -24,6 +24,7 @@
 - No exception reaches the user as a traceback (spec §7)
 - Live-Groq tests are manual/optional — excluded from default `pytest` run
 - Platform: Windows/PowerShell; all commands must run in PowerShell
+- Devcontainer (Task 7): image `mcr.microsoft.com/devcontainers/python:1-3.11`, feature `ghcr.io/devcontainers/features/playwright:1`, `postCreateCommand: pip install -r requirements.txt && playwright install chromium`, `remoteUser: vscode` — exact values from `docs/superpowers/specs/2026-10-06-desk-waker-devcontainer-design.md`; no Dockerfile, no compose
 
 ## Review Focus
 
@@ -32,6 +33,7 @@
 3. **Sensitive action runs without confirmation** — click on a submit button must call `on_confirm` before dispatch and honor a decline → test in Task 5 (`test_submit_click_requires_confirmation_decline_feeds_llm`)
 4. **Non-sensitive action blocked by over-eager confirmation** — plain link click and `navigate` must auto-run with `on_confirm` never called → test in Task 5 (`test_plain_link_click_auto_runs_without_confirmation`)
 5. **`ask_user` must suspend and resume with the exact user reply** — the reply appears in history sent back to the LLM → test in Task 4 (`test_ask_user_suspends_and_resumes_with_reply`)
+6. **Devcontainer config typo silently breaks Codespaces provisioning** — `devcontainer.json` must parse as JSON with the exact spec values → check in Task 7 (JSON parse step + spec-value diff)
 
 ---
 
@@ -350,4 +352,38 @@ Update `desk.waker.llm.md` Milestone Tracker: all four `Status: Pending` → `(S
 
 ```powershell
 git add -A; git commit -m "feat: terminal REPL with session logging (Milestone 4)"
+```
+
+---
+
+### Task 7: Devcontainer + README (Approach A)
+
+**Files:**
+- Create: `.devcontainer/devcontainer.json`, `README.md`
+- Spec: `docs/superpowers/specs/2026-10-06-desk-waker-devcontainer-design.md` (§3 has the exact JSON, §4 the README sections)
+
+**Interfaces:**
+- Consumes: `requirements.txt` (Task 1) — referenced by `postCreateCommand` only
+- Produces: nothing any other task consumes (environment-only task)
+
+- [ ] **Step 1: Write `.devcontainer/devcontainer.json` and `README.md`**
+
+`devcontainer.json` — exactly the four keys from spec §3: name `desk.waker`, image `mcr.microsoft.com/devcontainers/python:1-3.11`, feature `ghcr.io/devcontainers/features/playwright:1` with empty options, `postCreateCommand` `pip install -r requirements.txt && playwright install chromium`, `remoteUser` `vscode`.
+`README.md` — the six sections from spec §4 in order (description; Codespaces + VS Code reopen instructions; `pytest -v`; `.env.example` → `.env` → `python chat.py`; six-module layout; spec links).
+
+- [ ] **Step 2: Verify config validity**
+
+Run: `py -c "import json; c=json.load(open('.devcontainer/devcontainer.json')); assert c['image']=='mcr.microsoft.com/devcontainers/python:1-3.11' and c['features']['ghcr.io/devcontainers/features/playwright:1']=={} and c['postCreateCommand']=='pip install -r requirements.txt && playwright install chromium' and c['remoteUser']=='vscode'; print('valid')"`
+Expected: `valid`
+Also (only if Docker daemon is running locally): `devcontainer read-configuration --workspace-folder .` exits 0. If Docker is unavailable, note it in the report — the JSON check is the gate.
+
+- [ ] **Step 3: Run the full suite to confirm no host regression**
+
+Run: `pytest -v`
+Expected: all tests from Tasks 1–6 that exist at this point PASS, live test SKIPPED
+
+- [ ] **Step 4: Commit**
+
+```powershell
+git add .devcontainer README.md; git commit -m "feat: devcontainer environment and README (Approach A)"
 ```
