@@ -22,6 +22,8 @@ Two user-reported needs from a real v1 run (`goal: open youtube.com and play a r
 - Local Ollama only (v1 directive) — no cloud APIs
 - Out of scope (YAGNI): screenshots/vision, session-history browser, parallel turns, Streamlit
 
+**Planning amendments (2026-10-06, during plan mapping — surfaced by spec self-review):** `llm.next_action` runs via `asyncio.to_thread`; confirm/ask futures time out at 300 s (replacing the earlier "no timeout" line) and resolve as decline/empty; `GET /api/status` added for SSE-reconnect resync; `on_step` signature is `(entry, page_info, elements)`.
+
 ## 2. Architecture
 
 ```
@@ -90,9 +92,13 @@ Dynamic decide prompt: `DECIDE_PROMPT` becomes a function `decide_prompt(steps_u
   - `GET /` → `static/index.html`
   - `POST /api/goal` `{"goal": str}` → `202 {"started": true}`; spawns `run_turn` as a task
   - `GET /api/events` → `text/event-stream`; streams JSON events (below) to every connected client (broadcast from the active turn; clients connecting mid-turn receive subsequent events only)
+  - `GET /api/status` → `{"running": bool, "last_turn": {status, answer, steps_used} | null}`
   - `POST /api/respond` `{"id": str, "answer": str}` → resolves a pending confirm (`"y"`/`"n"`/free text) or `ask_user` reply; unknown/expired id → `409`
 - **Event types** (each a JSON `data:` frame): `turn_started {goal}`, `step {n, action, thought, result, url, title, element_count}`, `confirm {id, prompt}`, `ask {id, question}`, `turn_finished {status, answer, steps_used}`, `error {message}`.
-- **Callbacks bridge:** `run_turn(..., on_confirm=..., on_ask=..., on_step=...)` where `on_confirm`/`on_ask` publish the event and await an `asyncio.Future` resolved by `/api/respond` (no timeout — same semantics as terminal waiting on stdin); `on_step` is invoked as `on_step(entry, page_info)` after each transcript append, where `entry` is the transcript dict (`step`, `thought`, `action`, `result`) and `page_info` is the step's observation snapshot (`url`, `title`, …) — structured fields, not parsed from the observation string. `run_turn` passes `on_step` to nothing else; the terminal REPL simply omits it (default `None`, no behavior change).
+- **Callbacks bridge:** `run_turn(..., on_confirm=..., on_ask=..., on_step=...)` where `on_confirm`/`on_ask` publish the event and await an `asyncio.Future` resolved by `/api/respond`; `on_step` is invoked as `on_step(entry, page_info, elements)` after each transcript append, where `entry` is the transcript dict (`step`, `thought`, `action`, `result`), `page_info` is the step's observation snapshot (`url`, `title`, …), and `elements` is the observation's element list (the UI derives `element_count` from it). `run_turn` passes `on_step` to nothing else; the terminal REPL simply omits it (default `None`, no behavior change).
+- **Prompt responsiveness:** `run_turn` invokes `llm.next_action` via `asyncio.to_thread`, so the event loop (SSE, `/api/respond`, `/api/status`) stays live while the local model thinks.
+- **Orphaned prompts:** confirm/`ask_user` futures time out after `confirm_timeout` seconds (default **300**; injectable for tests). On timeout the turn treats it as a decline / empty reply and continues — a closed tab must never wedge the server into permanent `409`s.
+- **Resync:** `GET /api/status` → `{"running": bool, "last_turn": {status, answer, steps_used} | null}`; the frontend calls it whenever the SSE stream (re)opens so a dropped connection cannot leave the UI stuck on "working".
 - **v1 spec §7 applies:** unhandled exceptions become `error` events + a FastAPI exception handler returning clean JSON; SSE connections never emit tracebacks. Session transcripts still written via `SessionLogger` after each turn.
 
 ### 4.2 Frontend (`static/index.html`)
@@ -100,7 +106,7 @@ Dynamic decide prompt: `DECIDE_PROMPT` becomes a function `decide_prompt(steps_u
 Single page, vanilla JS, no build step:
 - **Left/main: chat pane** — goal input box; each turn appends the goal and, on `turn_finished`, the final answer/status.
 - **Right/side: live step feed** — cards appended on each `step` event: header `Step n/15 | action`, thought text, result (green `OK` / red `ERROR`), and page state line `URL · title · N elements`. Pending `confirm` events render an inline card with **Proceed (y)** / **Decline (n)** buttons; `ask` events render the question with a text input + Send. Only one pending prompt at a time.
-- Status line shows `working…` / `done` / `max_steps` / `error`; reconnects SSE on drop (EventSource auto-retry) and resyncs via the final `turn_finished` if missed.
+- Status line shows `working…` / `done` / `max_steps` / `error`; reconnects SSE on drop (EventSource auto-retry) and calls `GET /api/status` whenever the stream (re)opens to resync the status line and turn state.
 - No screenshots, no history persistence beyond the open page (out of scope).
 
 ## 5. Testing
