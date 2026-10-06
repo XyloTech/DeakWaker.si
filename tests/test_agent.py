@@ -21,11 +21,15 @@ def make_action(thought: str, action: str, **params) -> ActionMessage:
 
 
 class ScriptedLLM:
-    def __init__(self, responses: list[ActionMessage], verdicts: list[Verdict] | None = None):
+    def __init__(self, responses: list[ActionMessage], verdicts: list[Verdict] | None = None,
+                 extract_value: object | None = None, extract_error: LLMOutputError | None = None):
         self._responses = list(responses)
         self._verdicts = list(verdicts) if verdicts is not None else None
+        self.extract_calls: list[list[dict]] = []
         self.calls: list[list[dict]] = []
         self.verify_calls: list[list[dict]] = []
+        self._extract_value = extract_value
+        self._extract_error = extract_error
 
     def next_action(self, messages: list[dict]) -> ActionMessage:
         self.calls.append(messages)
@@ -36,6 +40,12 @@ class ScriptedLLM:
         if self._verdicts is None:
             return Verdict(complete=True, reason="scripted: goal assumed complete")
         return self._verdicts.pop(0)
+
+    def extract(self, messages: list[dict]) -> object:
+        self.extract_calls.append(messages)
+        if self._extract_error is not None:
+            raise self._extract_error
+        return self._extract_value or {"ok": True}
 
 
 def last_blob(call_messages: list[dict]) -> str:

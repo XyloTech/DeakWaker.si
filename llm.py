@@ -74,15 +74,19 @@ class LLMOutputError(Exception):
 class ActionParameters(BaseModel):
     element: str | None = None
     text: str | None = None
+    value: str | None = None
+    path: str | None = None
     url: str | None = None
     direction: str | None = None
     question: str | None = None
     answer: str | None = None
+    query: str | None = None
+    tab: str | None = None
 
 
 class ActionMessage(BaseModel):
     thought: str
-    action: Literal["navigate", "click", "type", "scroll", "done", "ask_user"]
+    action: Literal["navigate", "click", "type", "scroll", "done", "ask_user", "select", "upload", "screenshot", "extract", "new_tab", "switch_tab"]
     parameters: ActionParameters = ActionParameters()
 
 

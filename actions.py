@@ -1,10 +1,12 @@
 import re
 from dataclasses import dataclass
 from typing import Any, Callable, Awaitable
+from pathlib import Path
 
 
 ELEMENT_REF_PATTERN = re.compile(r"^E(\d+)$")
 SCHEME_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
+SCREENSHOT_DIR = str(Path("artifacts/screenshots"))
 
 
 def parse_element(reference: str | None) -> int | None:
@@ -97,8 +99,90 @@ async def _ask_user_handler(ctx: ActionContext, message) -> str:
     return str(reply)
 
 
+async def _select_handler(ctx: ActionContext, message) -> str:
+    index = parse_element(message.parameters.element)
+    if index is None:
+        valid = ", ".join(f'[E{element["index"]}]' for element in ctx.elements)
+        return (
+            f"ERROR: invalid element reference {message.parameters.element!r}. "
+            f"The browser chrome (address bar, tabs, back button) does not exist — "
+            f"you can only reference elements from the observation: {valid}"
+        )
+    await ctx.browser.select_option(index, message.parameters.value)  # type: ignore
+    return "OK"
+
+
+async def _upload_handler(ctx: ActionContext, message) -> str:
+    index = parse_element(message.parameters.element)
+    if index is None:
+        valid = ", ".join(f'[E{element["index"]}]' for element in ctx.elements)
+        return (
+            f"ERROR: invalid element reference {message.parameters.element!r}. "
+            f"The browser chrome (address bar, tabs, back button) does not exist — "
+            f"you can only reference elements from the observation: {valid}"
+        )
+    await ctx.browser.upload_file(index, message.parameters.path)  # type: ignore
+    return "OK"
+
+
+async def _screenshot_handler(ctx: ActionContext, message) -> str:
+    screenshot_dir = Path(SCREENSHOT_DIR)
+    screenshot_dir.mkdir(parents=True, exist_ok=True)
+    path = screenshot_dir / f"step-{ctx.step}.png"
+    await ctx.browser.take_screenshot(str(path))
+    return f"OK · screenshot saved: {path}"
+
+
+async def _extract_handler(ctx: ActionContext, message) -> str:
+    params = message.parameters
+    if not params.query:
+        return EXTRACT_VALIDATE_ERROR
+    info = await ctx.browser.get_page_info()
+    try:
+        value = await asyncio.to_thread(
+            ctx.llm.extract, build_extract_messages(info["text"], params.query)
+        )
+        return "OK · " + json.dumps(value, ensure_ascii=False)
+    except LLMOutputError as exc:
+        return f"ERROR: extraction failed: {exc}"
+
+
+async def _new_tab_handler(ctx: ActionContext, message) -> str:
+    params = message.parameters
+    url = params.url
+    await ctx.browser.new_tab(normalize_url(url) if url else None)
+    return "OK"
+
+
+async def _switch_tab_handler(ctx: ActionContext, message) -> str:
+    params = message.parameters
+    i = int(params.tab)
+    await ctx.browser.switch_tab(i)
+    return "OK"
+
+
+def _extract_validate(ctx: ActionContext, message) -> str | None:
+    if not message.parameters.query:
+        return EXTRACT_VALIDATE_ERROR
+    return None
+
+
+def _switch_tab_validate(ctx: ActionContext, message) -> str | None:
+    if not message.parameters.tab:
+        return SWITCH_TAB_VALIDATE_ERROR
+    try:
+        int(message.parameters.tab)
+    except (ValueError, TypeError):
+        return SWITCH_TAB_VALIDATE_ERROR
+    return None
+
+
 NAVIGATE_VALIDATE_ERROR = "ERROR: navigate requires parameters.url, e.g. https://example.com"
 TYPE_VALIDATE_ERROR = 'ERROR: type requires parameters.text, e.g. "Ada"'
+SELECT_VALIDATE_ERROR = 'ERROR: select requires parameters.value, e.g. "g"'
+UPLOAD_VALIDATE_ERROR = 'ERROR: upload requires parameters.path (absolute path to a local file)'
+EXTRACT_VALIDATE_ERROR = "ERROR: extract requires parameters.query (what to extract, e.g. \"prices as JSON\")"
+SWITCH_TAB_VALIDATE_ERROR = "ERROR: switch_tab requires parameters.tab as a zero-based index"
 
 
 def _navigate_validate(ctx: ActionContext, message) -> str | None:
@@ -110,6 +194,18 @@ def _navigate_validate(ctx: ActionContext, message) -> str | None:
 def _type_validate(ctx: ActionContext, message) -> str | None:
     if message.parameters.text is None:
         return TYPE_VALIDATE_ERROR
+    return None
+
+
+def _select_validate(ctx: ActionContext, message) -> str | None:
+    if not message.parameters.value:
+        return SELECT_VALIDATE_ERROR
+    return None
+
+
+def _upload_validate(ctx: ActionContext, message) -> str | None:
+    if not message.parameters.path:
+        return UPLOAD_VALIDATE_ERROR
     return None
 
 
@@ -134,6 +230,20 @@ ACTIONS: dict[str, ActionSpec] = {
         handler=_type_handler,
         validate=_type_validate,
     ),
+    "select": ActionSpec(
+        name="select",
+        description="choose an option in a dropdown; parameters.element + parameters.value",
+        requires_element=True,
+        handler=_select_handler,
+        validate=_select_validate,
+    ),
+    "upload": ActionSpec(
+        name="upload",
+        description="attach a local file to a file input; parameters.element + parameters.path",
+        requires_element=True,
+        handler=_upload_handler,
+        validate=_upload_validate,
+    ),
     "scroll": ActionSpec(
         name="scroll",
         description="scroll the page; parameters.direction is up or down",
@@ -146,10 +256,36 @@ ACTIONS: dict[str, ActionSpec] = {
         requires_element=False,
         handler=_done_handler,
     ),
-    "ask_user": ActionSpec(
+"ask_user": ActionSpec(
         name="ask_user",
         description="ask the user a question; parameters.question",
         requires_element=False,
         handler=_ask_user_handler,
+    ),
+    "screenshot": ActionSpec(
+        name="screenshot",
+        description="save a screenshot artifact for the user; no parameters",
+        requires_element=False,
+        handler=_screenshot_handler,
+    ),
+    "extract": ActionSpec(
+        name="extract",
+        description="pull structured data out of the page as JSON; parameters.query says what",
+        requires_element=False,
+        handler=_extract_handler,
+        validate=_extract_validate,
+    ),
+    "new_tab": ActionSpec(
+        name="new_tab",
+        description="open a new tab, optionally at parameters.url",
+        requires_element=False,
+        handler=_new_tab_handler,
+    ),
+    "switch_tab": ActionSpec(
+        name="switch_tab",
+        description="make another tab active; parameters.tab is the zero-based index",
+        requires_element=False,
+        handler=_switch_tab_handler,
+        validate=_switch_tab_validate,
     ),
 }

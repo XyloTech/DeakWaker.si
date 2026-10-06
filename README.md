@@ -24,10 +24,25 @@ pytest -v
 
 The live-LLM test skips unless `LIVE_LLM=1` is set (`LIVE_LLM=1 python -m pytest -m live -v`, requires Ollama running).
 
+## Actions
+
+- ask_user: ask the user a question; parameters.question
+- click: click the element referenced as [En]
+- done: finish the task; parameters.answer holds the final answer
+- extract: pull structured data out of the page as JSON; parameters.query says what
+- navigate: load a URL; parameters.url must be absolute (https:// or file://)
+- new_tab: open a new tab, optionally at parameters.url
+- screenshot: save a screenshot artifact for the user; no parameters
+- scroll: scroll the page; parameters.direction is up or down
+- select: choose an option in a dropdown; parameters.element + parameters.value
+- switch_tab: make another tab active; parameters.tab is the zero-based index
+- type: replace the text in an input with parameters.text
+- upload: attach a local file to a file input; parameters.element + parameters.path
+
 ## Run the agent
 
 1. Ensure Ollama is running (`ollama serve`) and the model is pulled: `ollama pull qwen3:latest`.
-2. Optionally copy `.env.example` to `.env` to override `OLLAMA_HOST`, `MODEL`, `THINKING` (model reasoning; off by default for speed), `HEADLESS`, `USER_DATA_DIR`, `SLOW_MO_MS`, `BROWSER_CHANNEL`, or `AUTO_CONFIRM`.
+2. Optionally copy `.env.example` to `.env` to override `OLLAMA_HOST`, `MODEL`, `THINKING` (model reasoning; off by default for speed), `HEADLESS`, `USER_DATA_DIR`, `SLOW_MO_MS`, `BROWSER_CHANNEL`, `AUTO_CONFIRM`, `EXTRACT_QUERY`, `NEW_TAB_URL`, `SWITCH_TAB_INDEX`, or `EXTRACT_TIMEOUT`.
 3. Run `python chat.py`.
 
 A visible window of your installed Google Chrome opens by default so you can watch every action (`BROWSER_CHANNEL=chrome`; it falls back to bundled Chromium if Chrome is missing, and `BROWSER_CHANNEL=none` forces the bundled browser). `SLOW_MO_MS` defaults to 100 ms of human-like delay per action when headful. Logins/cookies persist across runs in `./user_data/` (gitignored) — sign into a site once in the agent's window and it stays signed in. Set `HEADLESS=1` for invisible runs (required in Codespaces/devcontainer, which have no display). Sensitive actions (logins, submits, purchases) auto-approve by default (`AUTO_CONFIRM=1`); set `AUTO_CONFIRM=0` to be asked y/N before each one. When a step fails, the agent is shown recent console/network errors so it can diagnose and recover on its own.
