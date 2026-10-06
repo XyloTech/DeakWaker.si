@@ -26,7 +26,12 @@ SYSTEM_RULES = (
     "the user.\n"
     "- Use done only when the goal is verifiably achieved; put the final answer in "
     "parameters.answer.\n"
-    "- Check the recent history so you do not repeat actions that already failed."
+    "- Check the recent history so you do not repeat actions that already failed.\n"
+    "- The browser chrome (address bar, tabs, back button, anything outside the page) "
+    "does not exist for you. You can only see the observation and act on the elements it lists.\n"
+    "- Never retry an approach that just failed with the same parameters; change strategy "
+    "or, if genuinely blocked, use ask_user or done.\n"
+    "- Every navigate URL must be absolute, starting with https:// (or another scheme like file://).\n"
 )
 
 
@@ -125,7 +130,33 @@ def _system_prompt(goal: str) -> str:
     )
 
 
-def build_messages(goal: str, observation: str, history: list[dict]) -> list[dict]:
+def decide_prompt(
+    steps_used: int | None = None,
+    max_steps: int | None = None,
+    history: list[dict] | None = None,
+) -> str:
+    prompt = DECIDE_PROMPT
+    if steps_used is not None and max_steps is not None:
+        prompt = f"{DECIDE_PROMPT} Steps used: {steps_used}/{max_steps}."
+    if history is not None and len(history) >= 2:
+        last, previous = history[-1], history[-2]
+        if (
+            last.get("action") == previous.get("action")
+            and str(last.get("result", "")).startswith("ERROR")
+            and str(previous.get("result", "")).startswith("ERROR")
+        ):
+            prompt += " You have repeated a failed approach — do something different."
+    return prompt
+
+
+def build_messages(
+    goal: str,
+    observation: str,
+    history: list[dict],
+    *,
+    steps_used: int | None = None,
+    max_steps: int | None = None,
+) -> list[dict]:
     messages: list[dict] = [
         {"role": "system", "content": _system_prompt(goal)},
         {"role": "user", "content": observation},
@@ -138,7 +169,9 @@ def build_messages(goal: str, observation: str, history: list[dict]) -> list[dic
             {"role": "assistant", "content": f"Thought: {thought}\nAction: {action}"}
         )
         messages.append({"role": "user", "content": f"Result: {result}"})
-    messages.append({"role": "user", "content": DECIDE_PROMPT})
+    messages.append(
+        {"role": "user", "content": decide_prompt(steps_used, max_steps, history)}
+    )
     return messages
 
 

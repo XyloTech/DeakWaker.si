@@ -256,3 +256,22 @@ def test_element_changed_between_observation_and_dispatch():
             await browser.close()
 
     asyncio.run(scenario())
+
+def test_step_budget_sent_to_llm():
+    async def scenario():
+        browser = BrowserWrapper()
+        await browser.start()
+        try:
+            await browser.navigate_to(FIXTURE_URL)
+            llm = ScriptedLLM(
+                [
+                    make_action("scroll", "scroll", direction="down"),
+                    make_action("finish", "done", answer="done"),
+                ]
+            )
+            await run_turn("Scroll then finish", browser, llm)
+            assert "Steps used: 2/15." in last_blob(llm.calls[1])
+        finally:
+            await browser.close()
+
+    asyncio.run(scenario())

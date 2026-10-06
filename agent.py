@@ -147,7 +147,11 @@ async def run_turn(
         observation = render_observation(page_info, elements)
 
         try:
-            message = llm.next_action(build_messages(goal, observation, history))
+            message = llm.next_action(
+                build_messages(
+                    goal, observation, history, steps_used=step, max_steps=max_steps
+                )
+            )
         except LLMOutputError as exc:
             if str(exc).startswith(TRANSPORT_ERROR_PREFIX):
                 return TurnResult("error", str(exc), steps_used, transcript)

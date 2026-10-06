@@ -148,3 +148,43 @@ def test_next_action_live_smoke():
         "ask_user",
     }
     assert result.thought
+
+def test_system_rules_forbid_browser_chrome():
+    content = llm.build_messages("g", "obs", [])[0]["content"]
+    assert "address bar" in content
+    assert "does not exist" in content
+
+
+def test_system_rules_forbid_repeat_and_require_absolute_urls():
+    content = llm.build_messages("g", "obs", [])[0]["content"]
+    assert "Never retry an approach" in content
+    assert "must be absolute" in content
+
+
+def test_build_messages_includes_step_budget():
+    messages = llm.build_messages("g", "obs", [], steps_used=3, max_steps=15)
+    assert messages[-1]["content"] == "Decide the next single action. Steps used: 3/15."
+
+
+def test_decide_prompt_flags_repeated_failure():
+    history = [
+        {"thought": "", "action": "navigate", "result": "ERROR: invalid url"},
+        {"thought": "", "action": "navigate", "result": "ERROR: invalid url"},
+    ]
+    prompt = llm.decide_prompt(4, 15, history)
+    assert "repeated a failed approach" in prompt
+
+
+def test_decide_prompt_silent_when_success_repeats():
+    history = [
+        {"thought": "", "action": "scroll", "result": "OK"},
+        {"thought": "", "action": "scroll", "result": "OK"},
+    ]
+    prompt = llm.decide_prompt(4, 15, history)
+    assert "repeated a failed approach" not in prompt
+
+
+def test_decide_prompt_silent_on_single_failure():
+    history = [{"thought": "", "action": "navigate", "result": "ERROR: x"}]
+    prompt = llm.decide_prompt(4, 15, history)
+    assert "repeated a failed approach" not in prompt
