@@ -1,6 +1,7 @@
 import asyncio
 import pathlib
 import sys
+import threading
 
 import pytest
 
@@ -271,6 +272,108 @@ def test_step_budget_sent_to_llm():
             )
             await run_turn("Scroll then finish", browser, llm)
             assert "Steps used: 2/15." in last_blob(llm.calls[1])
+        finally:
+            await browser.close()
+
+    asyncio.run(scenario())
+
+def test_normalize_url_prepends_https_to_bare_hosts():
+    from agent import _normalize_url
+    assert _normalize_url("youtube.com") == "https://youtube.com"
+    assert _normalize_url("localhost:3000") == "https://localhost:3000"
+    assert _normalize_url("www.example.com/path?q=1") == "https://www.example.com/path?q=1"
+
+
+def test_normalize_url_keeps_existing_schemes():
+    from agent import _normalize_url
+    assert _normalize_url("https://x.com") == "https://x.com"
+    assert _normalize_url("http://x.com") == "http://x.com"
+    assert _normalize_url("file:///tmp/a.html") == "file:///tmp/a.html"
+
+
+def test_navigate_normalizes_url_before_dispatch():
+    async def scenario():
+        browser = BrowserWrapper()
+        await browser.start()
+        try:
+            recorded = []
+
+            async def fake_navigate(url):
+                recorded.append(url)
+
+            browser.navigate_to = fake_navigate
+            llm = ScriptedLLM(
+                [
+                    make_action("go to example", "navigate", url="example.com"),
+                    make_action("finish", "done", answer="done"),
+                ]
+            )
+            result = await run_turn("Open example.com", browser, llm)
+            assert result.status == "done"
+            assert recorded == ["https://example.com"]
+        finally:
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+def test_invalid_element_error_coaches_llm_with_element_refs():
+    async def scenario():
+        browser = BrowserWrapper()
+        await browser.start()
+        try:
+            await browser.navigate_to(FIXTURE_URL)
+            llm = ScriptedLLM(
+                [
+                    make_action("click nothing", "click"),
+                    make_action("finish", "done", answer="done"),
+                ]
+            )
+            await run_turn("Click around", browser, llm)
+            blob = last_blob(llm.calls[1])
+            assert "Result: ERROR: invalid element reference" in blob
+            assert "you can only reference elements from the observation: [E0]" in blob
+        finally:
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+def test_navigate_missing_url_error_includes_example():
+    async def scenario():
+        browser = BrowserWrapper()
+        await browser.start()
+        try:
+            await browser.navigate_to(FIXTURE_URL)
+            llm = ScriptedLLM(
+                [
+                    make_action("navigate with no url", "navigate"),
+                    make_action("finish", "done", answer="done"),
+                ]
+            )
+            await run_turn("Go somewhere", browser, llm)
+            assert "https://example.com" in last_blob(llm.calls[1])
+        finally:
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+def test_llm_next_action_runs_off_event_loop():
+    async def scenario():
+        browser = BrowserWrapper()
+        await browser.start()
+        try:
+            await browser.navigate_to(FIXTURE_URL)
+            seen_threads = []
+
+            class RecordingLLM:
+                def next_action(self, messages):
+                    seen_threads.append(threading.get_ident())
+                    return make_action("finish", "done", answer="done")
+
+            await run_turn("Finish", browser, RecordingLLM())
+            assert seen_threads and seen_threads[0] != threading.get_ident()
         finally:
             await browser.close()
 

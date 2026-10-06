@@ -1,3 +1,4 @@
+import asyncio
 import re
 from dataclasses import dataclass
 from typing import Callable
@@ -7,6 +8,7 @@ from config import MAX_HISTORY_STEPS, MAX_STEPS
 from llm import LLMOutputError, TRANSPORT_ERROR_PREFIX, build_messages, render_observation
 
 ELEMENT_REF_PATTERN = re.compile(r"^E(\d+)$")
+SCHEME_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
 
 SUBMIT_LABEL_PATTERN = re.compile(
     r"\b(sign in|log in|submit|pay|purchase|buy|order|confirm|send)\b", re.IGNORECASE
@@ -76,26 +78,38 @@ def _parse_element(reference: str | None) -> int | None:
     return int(match.group(1))
 
 
+def _normalize_url(url: str) -> str:
+    if SCHEME_PATTERN.match(url):
+        return url
+    return f"https://{url}"
+
+
 async def _dispatch(
     message,
     browser: BrowserWrapper,
     on_ask: Callable[[str], str] | None,
     index: int | None,
     expected: tuple[str, str] | None,
+    elements: list[dict],
 ) -> str:
     params = message.parameters
     if message.action in ("click", "type") and index is None:
-        return f"ERROR: invalid element reference {params.element!r}"
+        valid = ", ".join(f'[E{element["index"]}]' for element in elements)
+        return (
+            f"ERROR: invalid element reference {params.element!r}. The browser chrome "
+            "(address bar, tabs, back button) does not exist — you can only reference "
+            f"elements from the observation: {valid}"
+        )
     try:
         if message.action == "navigate":
             if not params.url:
-                return "ERROR: navigate requires parameters.url"
-            await browser.navigate_to(params.url)
+                return "ERROR: navigate requires parameters.url, e.g. https://example.com"
+            await browser.navigate_to(_normalize_url(params.url))
         elif message.action == "scroll":
             await browser.scroll(params.direction or "down")
         elif message.action in ("click", "type"):
             if message.action == "type" and params.text is None:
-                return "ERROR: type requires parameters.text"
+                return 'ERROR: type requires parameters.text, e.g. "Ada"'
             current = await browser.get_interactive_elements()
             found = next(
                 (entry for entry in current if entry["index"] == index), None
@@ -147,10 +161,11 @@ async def run_turn(
         observation = render_observation(page_info, elements)
 
         try:
-            message = llm.next_action(
+            message = await asyncio.to_thread(
+                llm.next_action,
                 build_messages(
                     goal, observation, history, steps_used=step, max_steps=max_steps
-                )
+                ),
             )
         except LLMOutputError as exc:
             if str(exc).startswith(TRANSPORT_ERROR_PREFIX):
@@ -199,11 +214,11 @@ async def run_turn(
             prompt = f"⚠ About to: {message.action} {target}. Proceed? [y/N] "
             approved = on_confirm(prompt) if on_confirm is not None else False
             if approved:
-                result = await _dispatch(message, browser, on_ask, index, expected)
+                result = await _dispatch(message, browser, on_ask, index, expected, elements)
             else:
                 result = "ERROR: USER DECLINED this action"
         else:
-            result = await _dispatch(message, browser, on_ask, index, expected)
+            result = await _dispatch(message, browser, on_ask, index, expected, elements)
         transcript.append(
             {
                 "step": step,
