@@ -6,14 +6,19 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+import llm
+
 from llm import (
     ActionMessage,
     LLMClient,
     LLMOutputError,
     Verdict,
+    EXTRACT_SYSTEM,
+    build_extract_messages,
     build_verify_messages,
     parse_action,
     parse_verdict,
+    _parse_json_value,
 )
 
 VALID_PAYLOAD = {
@@ -147,6 +152,38 @@ def test_build_verify_messages_includes_goal_and_observation():
     assert "Play a yo yo video" in blob
     assert observation in blob
     assert "complete" in blob
+
+
+def test_build_extract_messages_caps_text_and_carries_query():
+    long_text = "x" * (llm.OBSERVATION_TEXT_LIMIT + 500)
+    msgs = build_extract_messages(long_text, "prices as JSON")
+    blob = "\n".join(m["content"] for m in msgs)
+    assert "prices as JSON" in blob
+    assert long_text[:llm.OBSERVATION_TEXT_LIMIT] in blob
+    assert long_text[:llm.OBSERVATION_TEXT_LIMIT + 10] not in blob
+
+
+def test_extract_returns_parsed_json():
+    client = LLMClient(complete_fn=lambda m: json.dumps({"total": 9}))
+    assert client.extract([{"role": "user", "content": "x"}]) == {"total": 9}
+
+
+def test_extract_recovers_json_behind_prose():
+    calls = []
+
+    def fn(m):
+        calls.append(m)
+        return 'Sure!\n{"total": 9}' if len(calls) == 1 else json.dumps({"total": 9})
+
+    client = LLMClient(complete_fn=fn)
+    result = client.extract([{"role": "user", "content": "x"}])
+    assert result == {"total": 9}
+
+
+def test_extract_repairs_then_raises():
+    client = LLMClient(complete_fn=lambda m: "no json here")
+    with pytest.raises(LLMOutputError):
+        client.extract([{"role": "user", "content": "x"}])
 
 
 def test_client_verify_returns_verdict():

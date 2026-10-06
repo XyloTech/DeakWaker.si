@@ -35,6 +35,8 @@ VERIFY_SYSTEM = (
     "Output ONLY valid JSON: {\"complete\": true|false, \"reason\": \"brief explanation\"}."
 )
 
+EXTRACT_SYSTEM = "You extract structured data from web page content. Output ONLY valid JSON matching the user's request. No prose, no markdown fences."
+
 SYSTEM_RULES = (
     "- Respond with exactly ONE atomic action per response, as a JSON object with "
     'keys "thought", "action", and "parameters".\n'
@@ -149,7 +151,24 @@ def _loads(text: str) -> object:
     try:
         return json.loads(text)
     except json.JSONDecodeError as exc:
-        raise LLMOutputError(f"Invalid JSON: {exc}") from exc
+        raise LLMOutputError(f"Invalid JSON: {exc}")
+
+
+def _parse_json_value(raw: str) -> object:
+    try:
+        return _loads(raw)
+    except LLMOutputError:
+        block = _extract_first_json_block(raw)
+        if block is None:
+            raise
+        return _loads(block)
+
+
+def build_extract_messages(page_text: str, query: str) -> list[dict]:
+    return [
+        {"role": "system", "content": EXTRACT_SYSTEM},
+        {"role": "user", "content": f"Request: {query}\n\nPage content:\n{page_text[:OBSERVATION_TEXT_LIMIT]}"},
+    ]
 
 
 def _as_text(value: object) -> str:
@@ -311,6 +330,9 @@ class LLMClient:
 
     def verify(self, messages: list[dict]) -> Verdict:
         return self._parse_with_repair(messages, parse_verdict)
+
+    def extract(self, messages: list[dict]) -> object:
+        return self._parse_with_repair(messages, _parse_json_value)
 
     def _parse_with_repair(self, messages: list[dict], parser) -> object:
         raw = self._call_with_backoff(messages)
