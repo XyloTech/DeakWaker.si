@@ -43,6 +43,17 @@ def test_render_observation_formats_element_lines():
     assert "Example Domain" in output
 
 
+def test_render_observation_includes_http_hint():
+    page = {"url": "https://x/404", "title": "t", "text": "", "http_status": 404}
+    out = llm.render_observation(page, [])
+    assert "HTTP: 404 — page not found; URL may be wrong or the page moved" in out
+
+
+def test_render_observation_omits_http_line_when_unknown():
+    out = llm.render_observation(PAGE_INFO, ELEMENTS)  # no http_status key
+    assert "HTTP:" not in out
+
+
 def test_build_messages_contains_goal_and_observation():
     goal = "Click the Go button"
     observation = 'URL: https://example.com/\nElements:\n[E0] button "Go"'

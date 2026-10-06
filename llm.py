@@ -157,12 +157,34 @@ def _as_text(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
 
 
+HTTP_HINTS = {
+    401: "authentication required; a signed-in session may be needed",
+    403: "access forbidden; the site is blocking this session",
+    404: "page not found; URL may be wrong or the page moved",
+    429: "rate limited by the site; wait before retrying",
+}
+SERVER_ERROR_HINT = "server error; the site may be temporarily down"
+
+
+def _http_hint(status: int) -> str | None:
+    if status in HTTP_HINTS:
+        return HTTP_HINTS[status]
+    if status >= 500:
+        return SERVER_ERROR_HINT
+    return None
+
+
 def render_observation(page_info: dict, elements: list[dict]) -> str:
     lines = [
         f"URL: {page_info.get('url', '')}",
         f"Title: {page_info.get('title', '')}",
-        "Elements:",
     ]
+    status = page_info.get("http_status")
+    if status is not None:
+        hint = _http_hint(status)
+        if hint is not None:
+            lines.append(f"HTTP: {status} — {hint}")
+    lines.append("Elements:")
     for element in elements:
         lines.append(f'[E{element["index"]}] {element["role"]} "{element["text"]}"')
     lines.append("Visible text:")

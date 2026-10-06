@@ -1,4 +1,5 @@
 import asyncio
+import http.server
 import pathlib
 import sys
 import time
@@ -24,6 +25,35 @@ async def open_browser():
         yield wrapper
     finally:
         await wrapper.close()
+
+
+@asynccontextmanager
+async def serve_fixtures(handler_cls=None):
+    import functools, http.server, threading
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *args): pass
+    cls = handler_cls or Quiet
+    handler = functools.partial(cls, directory=str(pathlib.Path(__file__).parent / "fixtures"))
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=5)
+
+
+class StatusHandler(http.server.SimpleHTTPRequestHandler):  # 401/403 paths on top of fixture files
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        if self.path == "/auth":
+            self.send_error(401)
+        elif self.path == "/blocked":
+            self.send_error(403)
+        else:
+            super().do_GET()
 
 
 def index_of(elements: list[dict], **criteria) -> int:
@@ -359,4 +389,25 @@ def test_clear_diagnostics_empties_buffer():
             browser.clear_diagnostics()
             assert browser.get_diagnostics() == []
 
+    asyncio.run(scenario())
+
+
+def test_page_info_reports_http_status_200_and_404():
+    async def scenario():
+        async with serve_fixtures() as origin:
+            async with open_browser() as browser:
+                await browser.navigate_to(f"{origin}/site.html")
+                assert (await browser.get_page_info())["http_status"] == 200
+                await browser.navigate_to(f"{origin}/missing.html")
+                assert (await browser.get_page_info())["http_status"] == 404
+    asyncio.run(scenario())
+
+
+def test_status_listener_tracks_in_page_navigation():
+    async def scenario():
+        async with serve_fixtures() as origin:
+            async with open_browser() as browser:
+                await browser.navigate_to(f"{origin}/site.html")
+                await browser._page.evaluate("window.location = '/missing.html'")
+                await wait_for(lambda: browser._http_status == 404)
     asyncio.run(scenario())

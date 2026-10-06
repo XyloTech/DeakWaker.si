@@ -123,6 +123,7 @@ class BrowserWrapper:
         self._browser: BrowserContext | None = None
         self._page: Page | None = None
         self._elements: list[dict] = []
+        self._http_status: int | None = None
         self._diagnostics: deque[str] = deque(maxlen=DIAGNOSTICS_LIMIT)
 
     async def start(self) -> None:
@@ -160,10 +161,16 @@ class BrowserWrapper:
             if response.status >= 400:
                 record(f"http {response.status}: {response.url}")
 
+        async def on_navigation_response(response) -> None:
+            request = response.request
+            if request.is_navigation_request() and request.frame == page.main_frame:
+                self._http_status = response.status
+
         page.on("console", on_console)
         page.on("pageerror", on_page_error)
         page.on("requestfailed", on_request_failed)
         page.on("response", on_response)
+        page.on("response", on_navigation_response)
 
     def get_diagnostics(self) -> list[str]:
         return list(self._diagnostics)
@@ -214,9 +221,10 @@ class BrowserWrapper:
     async def navigate_to(self, url: str) -> None:
         page = self._require_page()
         try:
-            await page.goto(url, timeout=NAVIGATE_TIMEOUT_MS)
+            response = await page.goto(url, timeout=NAVIGATE_TIMEOUT_MS)
         except PlaywrightError as exc:
             raise BrowserActionError(f"Failed to navigate to {url!r}: {exc}") from exc
+        self._http_status = response.status if response else None
 
     async def get_page_info(self) -> dict:
         page = self._require_page()
@@ -237,6 +245,7 @@ class BrowserWrapper:
             "title": str(info["title"]),
             "text": str(info["text"] or "")[:OBSERVATION_TEXT_LIMIT],
             "has_password": bool(info["has_password"]),
+            "http_status": self._http_status,
         }
 
     async def get_interactive_elements(self) -> list[dict]:
