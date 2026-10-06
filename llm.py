@@ -146,6 +146,12 @@ def decide_prompt(
             and str(previous.get("result", "")).startswith("ERROR")
         ):
             prompt += " You have repeated a failed approach — do something different."
+    if history:
+        if str(history[-1].get("result", "")).startswith("ERROR"):
+            prompt += (
+                " The previous step failed — reason carefully about why"
+                " before choosing your next action."
+            )
     return prompt
 
 
@@ -175,10 +181,17 @@ def build_messages(
     return messages
 
 
+def _previous_step_failed(messages: list[dict]) -> bool:
+    return (
+        len(messages) >= 4
+        and messages[-2].get("role") == "user"
+        and str(messages[-2].get("content", "")).startswith("Result: ERROR")
+    )
+
+
 def _chat_kwargs(model: str, messages: list[dict]) -> dict:
     kwargs: dict = {"model": model, "messages": messages, "format": "json"}
-    if not THINKING:
-        kwargs["think"] = False
+    kwargs["think"] = THINKING or _previous_step_failed(messages)
     return kwargs
 
 

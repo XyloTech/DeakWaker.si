@@ -65,7 +65,8 @@ def test_build_messages_contains_goal_and_observation():
         assert step["thought"] in blob
         assert step["action"] in blob
         assert step["result"] in blob
-    assert messages[-1]["content"] == "Decide the next single action."
+    assert messages[-1]["content"].startswith("Decide the next single action.")
+    assert "Steps used" not in messages[-1]["content"]
 
 
 def test_next_action_backoff_then_fails(monkeypatch):
@@ -199,10 +200,45 @@ def test_chat_kwargs_disables_thinking_by_default(monkeypatch):
 def test_chat_kwargs_keeps_thinking_when_enabled(monkeypatch):
     monkeypatch.setattr(llm, "THINKING", True)
     kwargs = llm._chat_kwargs("qwen3:latest", [{"role": "user", "content": "hi"}])
-    assert "think" not in kwargs
+    assert kwargs["think"] is True
 
 
 def test_chat_kwargs_omits_think_for_truncation_control(monkeypatch):
     monkeypatch.setattr(llm, "THINKING", False)
     kwargs = llm._chat_kwargs("qwen3:latest", [{"role": "user", "content": "hi"}])
     assert "num_predict" not in kwargs
+
+
+def _messages_after(result):
+    history = [{"thought": "t", "action": "click", "result": result}]
+    return build_messages("g", "obs", history)
+
+
+def test_chat_kwargs_thinks_after_failed_step(monkeypatch):
+    monkeypatch.setattr(llm, "THINKING", False)
+    kwargs = llm._chat_kwargs("qwen3:latest", _messages_after("ERROR: stale element"))
+    assert kwargs["think"] is True
+
+
+def test_chat_kwargs_stays_fast_after_successful_step(monkeypatch):
+    monkeypatch.setattr(llm, "THINKING", False)
+    kwargs = llm._chat_kwargs("qwen3:latest", _messages_after("OK"))
+    assert kwargs["think"] is False
+
+
+def test_chat_kwargs_stays_fast_on_first_step(monkeypatch):
+    monkeypatch.setattr(llm, "THINKING", False)
+    kwargs = llm._chat_kwargs("qwen3:latest", build_messages("g", "obs", []))
+    assert kwargs["think"] is False
+
+
+def test_decide_prompt_nudges_after_failed_step():
+    history = [{"thought": "", "action": "navigate", "result": "ERROR: x"}]
+    prompt = llm.decide_prompt(2, 15, history)
+    assert "reason carefully about why" in prompt
+
+
+def test_decide_prompt_no_nudge_after_success():
+    history = [{"thought": "", "action": "navigate", "result": "OK"}]
+    prompt = llm.decide_prompt(2, 15, history)
+    assert "reason carefully about why" not in prompt
