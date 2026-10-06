@@ -1,4 +1,5 @@
 from collections import deque
+from pathlib import Path
 
 from playwright.async_api import (
     BrowserContext,
@@ -327,6 +328,46 @@ class BrowserWrapper:
         except PlaywrightError as exc:
             raise BrowserActionError(
                 f"type_text({index}) failed for {element['selector']!r}: {exc}"
+            ) from exc
+
+    async def select_option(self, index: int, value: str) -> None:
+        element = self._resolve(index)
+        selector = element["selector"]
+        page = self._require_page()
+        try:
+            await page.select_option(selector, value=value, timeout=ACTION_TIMEOUT_MS)
+            return
+        except PlaywrightError:
+            pass
+        try:
+            await page.select_option(selector, label=value, timeout=ACTION_TIMEOUT_MS)
+            return
+        except PlaywrightError:
+            pass
+        try:
+            opts = await page.evaluate(
+                f"sel => Array.from(document.querySelector(sel).options).map(o => o.value + '|' + o.text)",
+                selector,
+            )
+            raise BrowserActionError(
+                f"select_option({index}) failed: no option matching {value!r}; available: {opts}"
+            )
+        except PlaywrightError:
+            raise BrowserActionError(
+                f"select_option({index}) failed: no option matching {value!r}"
+            )
+
+    async def upload_file(self, index: int, path: str) -> None:
+        if not Path(path).is_file():
+            raise BrowserActionError(f"upload_file: no such file: {path}")
+        element = self._resolve(index)
+        selector = element["selector"]
+        page = self._require_page()
+        try:
+            await page.set_input_files(selector, str(path), timeout=ACTION_TIMEOUT_MS)
+        except PlaywrightError as exc:
+            raise BrowserActionError(
+                f"upload_file({index}) failed for {selector!r}: {exc}"
             ) from exc
 
     async def get_value(self, index: int) -> str:

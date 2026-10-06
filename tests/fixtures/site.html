@@ -34,6 +34,12 @@
     <div>Observers record roles, short labels, and stable selectors for every visible control, giving the planning model a compact but sufficient description of what can be clicked or typed into next.</div>
   </div>
   <div id="dest">Destination</div>
+  <select id="colors">
+    <option value="r">Red</option>
+    <option value="g">Green</option>
+    <option value="b">Blue</option>
+  </select>
+  <input type="file" id="uploader">
   <script>
     document.getElementById('go').addEventListener('click', function () {
       var p = document.createElement('p');

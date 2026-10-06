@@ -454,3 +454,58 @@ def test_observation_reports_tab_state():
             assert info["tabs"] == 2 and info["active_tab"] == 1
             assert "Tabs: 2 (active 1)" in render_observation(info, [])
     asyncio.run(scenario())
+
+
+def test_select_option_by_value_and_label():
+    async def scenario():
+        async with open_browser() as browser:
+            await browser.navigate_to(FIXTURE_URL)
+            elements = await browser.get_interactive_elements()
+            idx = index_of(elements, selector="#colors")
+            await browser.select_option(idx, "g")
+            selected = await browser._page.evaluate("document.querySelector('#colors').value")
+            assert selected == "g"
+            await browser.select_option(idx, "Blue")
+            selected = await browser._page.evaluate("document.querySelector('#colors').value")
+            assert selected == "b"
+    asyncio.run(scenario())
+
+
+def test_select_option_mismatch_lists_available():
+    async def scenario():
+        async with open_browser() as browser:
+            await browser.navigate_to(FIXTURE_URL)
+            await browser.get_interactive_elements()
+            idx = index_of(browser._elements, selector="#colors")
+            with pytest.raises(BrowserActionError, match="available"):
+                await browser.select_option(idx, "nope")
+    asyncio.run(scenario())
+
+
+def test_upload_missing_file_reports_no_such_file():
+    async def scenario():
+        async with open_browser() as browser:
+            await browser.navigate_to(FIXTURE_URL)
+            await browser.get_interactive_elements()
+            with pytest.raises(BrowserActionError, match="no such file"):
+                await browser.upload_file(0, "/nonexistent/path/file.txt")
+    asyncio.run(scenario())
+    async def scenario():
+        import tempfile
+        import os
+        async with open_browser() as browser:
+            await browser.navigate_to(FIXTURE_URL)
+            elements = await browser.get_interactive_elements()
+            upload_index = index_of(elements, selector="#uploader")
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+                f.write("hello world")
+                tmp_path = f.name
+            try:
+                await browser.upload_file(upload_index, tmp_path)
+                name = await browser._page.evaluate(
+                    "el => document.querySelector('#uploader').files[0].name",
+                )
+                assert name == os.path.basename(tmp_path)
+            finally:
+                os.unlink(tmp_path)
+    asyncio.run(scenario())
