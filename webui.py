@@ -114,6 +114,7 @@ def create_app(
         broadcast({"type": "turn_started", "goal": goal})
         try:
             try:
+                await state.browser.start()
                 result = await run_turn(
                     goal,
                     state.browser,

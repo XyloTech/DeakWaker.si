@@ -126,6 +126,30 @@ def test_index_served():
         assert "desk.waker" in response.text
 
 
+def test_goal_checks_browser_liveness_each_turn():
+    from browser import BrowserWrapper
+
+    class CountingBrowser(BrowserWrapper):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.start_calls = 0
+
+        async def start(self):
+            await super().start()
+            self.start_calls += 1
+
+    script = [navigate_action(), make_action("finish", "done", answer="ok")]
+    browser = CountingBrowser()
+    with live_app(llm=ScriptedLLM(script), browser=browser) as (client, events, _):
+        assert browser.start_calls == 1
+        response = client.post("/api/goal", json={"goal": GOAL})
+        assert response.status_code == 202
+        wait_for(lambda: any(e["type"] == "turn_finished" for e in events))
+        assert browser.start_calls == 2
+        finished = [e for e in events if e["type"] == "turn_finished"][-1]
+        assert finished["status"] == "done"
+
+
 def test_empty_goal_rejected():
     with live_app() as (client, events, _):
         response = client.post("/api/goal", json={"goal": "   "})

@@ -103,8 +103,10 @@ class BrowserWrapper:
         self._elements: list[dict] = []
 
     async def start(self) -> None:
-        if self._page is not None:
+        if self._page is not None and not self._page.is_closed():
             return
+        if self._playwright is not None:
+            await self.close()
         try:
             self._playwright = await async_playwright().start()
             self._browser = await self._playwright.chromium.launch_persistent_context(
@@ -125,7 +127,10 @@ class BrowserWrapper:
         self._elements = []
         try:
             if browser is not None:
-                await browser.close()
+                try:
+                    await browser.close()
+                except PlaywrightError:
+                    pass
         finally:
             if playwright is not None:
                 await playwright.stop()

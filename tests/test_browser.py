@@ -148,6 +148,22 @@ def test_observe_wraps_playwright_error():
     asyncio.run(scenario())
 
 
+def test_start_recovers_after_window_closed():
+    async def scenario():
+        browser = BrowserWrapper()
+        await browser.start()
+        try:
+            await browser._page.close()
+            await browser.start()
+            await browser.navigate_to(FIXTURE_URL)
+            info = await browser.get_page_info()
+            assert "Fixture" in info["title"]
+        finally:
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
 def test_persistent_profile_survives_restart(tmp_path, monkeypatch):
     import functools
     import http.server
