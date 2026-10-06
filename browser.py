@@ -122,6 +122,7 @@ class BrowserWrapper:
         self._playwright: Playwright | None = None
         self._browser: BrowserContext | None = None
         self._page: Page | None = None
+        self._pages: list[Page] = []
         self._elements: list[dict] = []
         self._http_status: int | None = None
         self._diagnostics: deque[str] = deque(maxlen=DIAGNOSTICS_LIMIT)
@@ -136,13 +137,24 @@ class BrowserWrapper:
         except PlaywrightError as exc:
             raise BrowserActionError(f"Failed to start browser: {exc}") from exc
         self._browser = await self._open_context()
+        self._browser.on("page", self._register_page)
         if self._browser.pages:
             self._page = self._browser.pages[0]
         else:
             self._page = await self._browser.new_page()
-        self._attach_diagnostics(self._page)
+        self._register_page(self._page)
 
-    def _attach_diagnostics(self, page: Page) -> None:
+    def _register_page(self, page: Page) -> None:
+        if page in self._pages:
+            return
+        self._pages.append(page)
+        self._attach_page_listeners(page)
+        page.on(
+            "close",
+            lambda: self._pages.remove(page) if page in self._pages else None,
+        )
+
+    def _attach_page_listeners(self, page: Page) -> None:
         def record(entry: str) -> None:
             self._diagnostics.append(entry)
 
@@ -206,6 +218,7 @@ class BrowserWrapper:
         self._browser = None
         self._playwright = None
         self._page = None
+        self._pages = []
         self._elements = []
         self._diagnostics.clear()
         try:
@@ -225,6 +238,30 @@ class BrowserWrapper:
         except PlaywrightError as exc:
             raise BrowserActionError(f"Failed to navigate to {url!r}: {exc}") from exc
         self._http_status = response.status if response else None
+
+    async def new_tab(self, url: str | None = None) -> None:
+        if self._browser is None:
+            raise BrowserActionError("Browser is not started; call start() first")
+        page = await self._browser.new_page()
+        self._register_page(page)
+        self._page = page
+        if url is None:
+            return
+        try:
+            await page.goto(url, timeout=NAVIGATE_TIMEOUT_MS)
+        except PlaywrightError as exc:
+            raise BrowserActionError(f"Failed to navigate to {url!r}: {exc}") from exc
+
+    async def switch_tab(self, index: int) -> None:
+        if index < 0 or index >= len(self._pages):
+            raise BrowserActionError(
+                f"no tab {index}; {len(self._pages)} tabs open"
+            )
+        self._page = self._pages[index]
+
+    @property
+    def tab_count(self) -> int:
+        return len(self._pages)
 
     async def get_page_info(self) -> dict:
         page = self._require_page()
@@ -246,6 +283,10 @@ class BrowserWrapper:
             "text": str(info["text"] or "")[:OBSERVATION_TEXT_LIMIT],
             "has_password": bool(info["has_password"]),
             "http_status": self._http_status,
+            "tabs": len(self._pages),
+            "active_tab": (
+                self._pages.index(self._page) if self._page in self._pages else 0
+            ),
         }
 
     async def get_interactive_elements(self) -> list[dict]:

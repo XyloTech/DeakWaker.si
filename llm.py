@@ -184,6 +184,10 @@ def render_observation(page_info: dict, elements: list[dict]) -> str:
         hint = _http_hint(status)
         if hint is not None:
             lines.append(f"HTTP: {status} — {hint}")
+    lines.append(
+        "Tabs: "
+        f"{int(page_info.get('tabs', 1))} (active {int(page_info.get('active_tab', 0))})"
+    )
     lines.append("Elements:")
     for element in elements:
         lines.append(f'[E{element["index"]}] {element["role"]} "{element["text"]}"')

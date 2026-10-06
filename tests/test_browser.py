@@ -13,6 +13,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import browser as browser_mod
 from browser import BrowserActionError, BrowserWrapper
+from llm import render_observation
 
 FIXTURE_URL = (pathlib.Path(__file__).parent / "fixtures" / "site.html").resolve().as_uri()
 
@@ -410,4 +411,46 @@ def test_status_listener_tracks_in_page_navigation():
                 await browser.navigate_to(f"{origin}/site.html")
                 await browser._page.evaluate("window.location = '/missing.html'")
                 await wait_for(lambda: browser._http_status == 404)
+    asyncio.run(scenario())
+
+
+def test_new_tab_switch_and_close_tracking():
+    async def scenario():
+        async with open_browser() as browser:
+            info = await browser.get_page_info()
+            assert info["tabs"] == 1 and info["active_tab"] == 0
+            await browser.new_tab("about:blank")
+            assert browser.tab_count == 2
+            await browser.switch_tab(0)
+            assert (await browser.get_page_info())["active_tab"] == 0
+            await browser._pages[1].close()
+            await wait_for(lambda: browser.tab_count == 1)
+    asyncio.run(scenario())
+
+
+def test_diagnostics_attach_to_new_tabs():
+    async def scenario():
+        async with open_browser() as browser:
+            await browser.new_tab(ERRORS_FIXTURE_URL)
+            await wait_for(lambda: any("kapow" in d for d in browser.get_diagnostics()))
+    asyncio.run(scenario())
+
+
+def test_switch_tab_out_of_range_reports_coaching():
+    async def scenario():
+        async with open_browser() as browser:
+            with pytest.raises(BrowserActionError, match="tab"):
+                await browser.switch_tab(7)
+    asyncio.run(scenario())
+
+
+def test_observation_reports_tab_state():
+    async def scenario():
+        async with open_browser() as browser:
+            info = await browser.get_page_info()
+            assert "Tabs: 1 (active 0)" in render_observation(info, [])
+            await browser.new_tab("about:blank")
+            info = await browser.get_page_info()
+            assert info["tabs"] == 2 and info["active_tab"] == 1
+            assert "Tabs: 2 (active 1)" in render_observation(info, [])
     asyncio.run(scenario())
