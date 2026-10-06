@@ -144,12 +144,17 @@ async def run_turn(
     *,
     on_confirm: Callable[[str], bool] | None = None,
     on_ask: Callable[[str], str] | None = None,
+    on_step: Callable[[dict, dict, list], None] | None = None,
     max_steps: int = MAX_STEPS,
     max_history: int = MAX_HISTORY_STEPS,
 ) -> TurnResult:
     history: list[dict] = []
     transcript: list[dict] = []
     steps_used = 0
+
+    def emit(entry: dict) -> None:
+        if on_step is not None:
+            on_step(entry, page_info, elements)
 
     for step in range(1, max_steps + 1):
         steps_used = step
@@ -182,20 +187,21 @@ async def run_turn(
             transcript.append(entry)
             history.append({"thought": "", "action": "error", "result": result})
             history = history[-max_history:]
+            emit(entry)
             continue
 
         print(format_step_line(step, max_steps, message.action, message.thought))
 
         if message.action == "done":
-            transcript.append(
-                {
-                    "step": step,
-                    "observation": observation,
-                    "thought": message.thought,
-                    "action": "done",
-                    "result": "OK",
-                }
-            )
+            entry = {
+                "step": step,
+                "observation": observation,
+                "thought": message.thought,
+                "action": "done",
+                "result": "OK",
+            }
+            transcript.append(entry)
+            emit(entry)
             return TurnResult("done", message.parameters.answer, steps_used, transcript)
 
         index = _parse_element(message.parameters.element)
@@ -219,18 +225,18 @@ async def run_turn(
                 result = "ERROR: USER DECLINED this action"
         else:
             result = await _dispatch(message, browser, on_ask, index, expected, elements)
-        transcript.append(
-            {
-                "step": step,
-                "observation": observation,
-                "thought": message.thought,
-                "action": message.action,
-                "result": result,
-            }
-        )
+        entry = {
+            "step": step,
+            "observation": observation,
+            "thought": message.thought,
+            "action": message.action,
+            "result": result,
+        }
+        transcript.append(entry)
         history.append(
             {"thought": message.thought, "action": message.action, "result": result}
         )
         history = history[-max_history:]
+        emit(entry)
 
     return TurnResult("max_steps", None, steps_used, transcript)

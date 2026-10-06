@@ -378,3 +378,33 @@ def test_llm_next_action_runs_off_event_loop():
             await browser.close()
 
     asyncio.run(scenario())
+
+def test_on_step_receives_entry_page_info_and_elements():
+    async def scenario():
+        browser = BrowserWrapper()
+        await browser.start()
+        try:
+            await browser.navigate_to(FIXTURE_URL)
+            elements = await browser.get_interactive_elements()
+            go = index_of(elements, role="button", text="Go")
+            llm = ScriptedLLM(
+                [
+                    make_action("click Go", "click", element=f"E{go}"),
+                    make_action("finish", "done", answer="done"),
+                ]
+            )
+            calls = []
+            result = await run_turn(
+                "Click Go",
+                browser,
+                llm,
+                on_step=lambda entry, page, els: calls.append((entry, page, els)),
+            )
+            assert result.status == "done"
+            assert [call[0]["step"] for call in calls] == [1, 2]
+            assert calls[0][1]["url"] == FIXTURE_URL
+            assert calls[0][2] and calls[0][2][0]["index"] == 0
+        finally:
+            await browser.close()
+
+    asyncio.run(scenario())
