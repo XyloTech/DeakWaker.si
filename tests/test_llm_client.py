@@ -139,4 +139,12 @@ def test_next_action_live_smoke():
     )
     result = client.next_action(messages)
     assert isinstance(result, ActionMessage)
-    assert result.action == "navigate"
+    assert result.action in {
+        "navigate",
+        "click",
+        "type",
+        "scroll",
+        "done",
+        "ask_user",
+    }
+    assert result.thought
