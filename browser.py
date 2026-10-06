@@ -66,17 +66,23 @@ _COLLECT_ELEMENTS_JS = """
   const nodes = document.querySelectorAll(
     'a, button, input, select, textarea, [role=button], [role=link]'
   );
-  const collected = [];
-  nodes.forEach((el) => {
-    if (el.disabled) return;
-    if (el.type === 'hidden') return;
-    const style = window.getComputedStyle(el);
-    if (style.display === 'none' || style.visibility === 'hidden') return;
-    const rect = el.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return;
-    collected.push({ role: roleFor(el), text: textFor(el), selector: selectorFor(el) });
-  });
-  return collected;
+    const collected = [];
+    nodes.forEach((el) => {
+      if (el.disabled) return;
+      if (el.type === 'hidden') return;
+      const style = window.getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden') return;
+      const rect = el.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      collected.push({
+        role: roleFor(el),
+        text: textFor(el),
+        selector: selectorFor(el),
+        submit:
+          (el.type || '').toLowerCase() === 'submit' && el.form != null,
+      });
+    });
+    return collected;
 }
 """
 
@@ -158,6 +164,7 @@ class BrowserWrapper:
                 "role": item["role"],
                 "text": item["text"],
                 "selector": item["selector"],
+                "submit": bool(item.get("submit", False)),
             }
             for index, item in enumerate(collected)
         ]

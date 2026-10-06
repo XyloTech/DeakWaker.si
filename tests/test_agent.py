@@ -214,3 +214,45 @@ def test_format_step_line_truncates_thought():
     assert line.startswith("Step 3/15 | click | ")
     assert "\n" not in line
     assert len(line) < 120
+
+
+def test_element_changed_between_observation_and_dispatch():
+    async def scenario():
+        browser = BrowserWrapper()
+        await browser.start()
+        try:
+            await browser.navigate_to(FIXTURE_URL)
+            elements = await browser.get_interactive_elements()
+            go = index_of(elements, role="button", text="Go")
+
+            real_observe = browser.get_interactive_elements
+            observe_calls = {"n": 0}
+
+            async def re_rendering_observe():
+                observe_calls["n"] += 1
+                fresh = await real_observe()
+                if observe_calls["n"] == 2:
+                    fresh = [dict(entry) for entry in fresh]
+                    fresh[0]["text"] = "Submit now"
+                    browser._elements = fresh
+                return fresh
+
+            browser.get_interactive_elements = re_rendering_observe
+
+            llm = ScriptedLLM(
+                [
+                    make_action("click Go", "click", element=f"E{go}"),
+                    make_action("finished", "done", answer="done"),
+                ]
+            )
+
+            result = await run_turn("Click the Go button", browser, llm)
+
+            assert result.status == "done"
+            second_call = last_blob(llm.calls[1])
+            assert "ERROR" in second_call
+            assert "changed" in second_call
+        finally:
+            await browser.close()
+
+    asyncio.run(scenario())

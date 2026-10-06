@@ -72,3 +72,17 @@ def test_on_confirm_prints_unicode_prompt_after_configure(monkeypatch):
 
     assert approved is False
     assert "Proceed?" in buffer.getvalue().decode("utf-8")
+
+
+def test_main_prints_clean_message_on_unexpected_error(monkeypatch, capsys):
+    def exploding_run(coroutine):
+        coroutine.close()
+        raise RuntimeError("browser failed to start")
+
+    monkeypatch.setattr(chat.asyncio, "run", exploding_run)
+
+    chat.main()
+
+    captured = capsys.readouterr()
+    assert "browser failed to start" in captured.out
+    assert "Traceback" not in captured.out

@@ -8,8 +8,8 @@ from llm import LLMOutputError, TRANSPORT_ERROR_PREFIX, build_messages, render_o
 
 ELEMENT_REF_PATTERN = re.compile(r"^E(\d+)$")
 
-FORM_SUBMIT_WORDS = frozenset(
-    {"submit", "sign in", "log in", "pay", "purchase", "buy", "order", "confirm", "send"}
+SUBMIT_LABEL_PATTERN = re.compile(
+    r"\b(sign in|log in|submit|pay|purchase|buy|order|confirm|send)\b", re.IGNORECASE
 )
 PAYMENT_WORDS = frozenset({"pay", "purchase", "buy", "checkout", "price"})
 
@@ -30,8 +30,14 @@ def is_sensitive(action, page_info: dict, elements: list[dict]) -> str | None:
     target = _target_text(action, elements).lower()
     title = str(page_info.get("title", "")).lower()
 
-    if action.action == "click" and target.strip() in FORM_SUBMIT_WORDS:
-        return "form submission"
+    if action.action == "click":
+        index = _parse_element(action.parameters.element)
+        is_submit_control = any(
+            element.get("index") == index and element.get("submit")
+            for element in elements
+        )
+        if is_submit_control or SUBMIT_LABEL_PATTERN.search(target):
+            return "form submission"
 
     if any(word in target for word in PAYMENT_WORDS) or any(
         word in title for word in PAYMENT_WORDS
@@ -71,7 +77,11 @@ def _parse_element(reference: str | None) -> int | None:
 
 
 async def _dispatch(
-    message, browser: BrowserWrapper, on_ask: Callable[[str], str] | None, index: int | None
+    message,
+    browser: BrowserWrapper,
+    on_ask: Callable[[str], str] | None,
+    index: int | None,
+    expected: tuple[str, str] | None,
 ) -> str:
     params = message.parameters
     if message.action in ("click", "type") and index is None:
@@ -83,14 +93,25 @@ async def _dispatch(
             await browser.navigate_to(params.url)
         elif message.action == "scroll":
             await browser.scroll(params.direction or "down")
-        elif message.action == "click":
-            await browser.get_interactive_elements()
-            await browser.click(index)
-        elif message.action == "type":
-            if params.text is None:
+        elif message.action in ("click", "type"):
+            if message.action == "type" and params.text is None:
                 return "ERROR: type requires parameters.text"
-            await browser.get_interactive_elements()
-            await browser.type_text(index, params.text)
+            current = await browser.get_interactive_elements()
+            found = next(
+                (entry for entry in current if entry["index"] == index), None
+            )
+            if expected is not None and (
+                found is None or (found["role"], found["text"]) != expected
+            ):
+                actual = None if found is None else (found["role"], found["text"])
+                return (
+                    "ERROR: element changed since observation "
+                    f"(expected {expected!r}, found {actual!r})"
+                )
+            if message.action == "click":
+                await browser.click(index)
+            else:
+                await browser.type_text(index, params.text)
         elif message.action == "ask_user":
             question = params.question or ""
             reply = on_ask(question) if on_ask is not None else ""
@@ -159,6 +180,13 @@ async def run_turn(
             return TurnResult("done", message.parameters.answer, steps_used, transcript)
 
         index = _parse_element(message.parameters.element)
+        expected: tuple[str, str] | None = None
+        if index is not None:
+            observed = next(
+                (entry for entry in elements if entry["index"] == index), None
+            )
+            if observed is not None:
+                expected = (observed["role"], observed["text"])
 
         # Guardrail: after element parsing, before dispatch.
         reason = is_sensitive(message, page_info, elements)
@@ -167,11 +195,11 @@ async def run_turn(
             prompt = f"⚠ About to: {message.action} {target}. Proceed? [y/N] "
             approved = on_confirm(prompt) if on_confirm is not None else False
             if approved:
-                result = await _dispatch(message, browser, on_ask, index)
+                result = await _dispatch(message, browser, on_ask, index, expected)
             else:
                 result = "ERROR: USER DECLINED this action"
         else:
-            result = await _dispatch(message, browser, on_ask, index)
+            result = await _dispatch(message, browser, on_ask, index, expected)
         transcript.append(
             {
                 "step": step,

@@ -53,8 +53,8 @@ async def repl() -> None:
     browser = BrowserWrapper(headless=HEADLESS)
     llm = LLMClient()
     logger = SessionLogger()
-    await browser.start()
     try:
+        await browser.start()
         while True:
             try:
                 goal = input("goal: ").strip()
@@ -84,6 +84,9 @@ def main() -> None:
         asyncio.run(repl())
     except KeyboardInterrupt:
         print("\nGoodbye!")
+    except Exception as exc:
+        print(f"\nShutting down: {exc}")
+        print("Fix the problem above, then start the agent again with: python chat.py")
 
 
 if __name__ == "__main__":

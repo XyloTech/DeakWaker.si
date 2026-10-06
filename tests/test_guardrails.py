@@ -146,6 +146,68 @@ def test_navigate_never_sensitive():
     assert is_sensitive(action, page_info, elements) is None
 
 
+def test_submit_input_type_is_sensitive():
+    action = make_action("click continue", "click", element="E4")
+    page_info = {"has_password": True, "title": "Fixture Page", "url": "x", "text": ""}
+    elements = [
+        {
+            "index": 4,
+            "role": "button",
+            "text": "Continue",
+            "selector": "#continue",
+            "submit": True,
+        }
+    ]
+
+    reason = is_sensitive(action, page_info, elements)
+
+    assert reason is not None
+    assert "form submission" in reason
+
+
+def test_button_label_with_submit_keyword_is_sensitive():
+    action = make_action("click sign in", "click", element="E0")
+    page_info = {"has_password": False, "title": "Fixture Page", "url": "x", "text": ""}
+    elements = [
+        {"index": 0, "role": "button", "text": "Sign in with Google", "selector": "#g"}
+    ]
+
+    reason = is_sensitive(action, page_info, elements)
+
+    assert reason is not None
+    assert "form submission" in reason
+
+
+def test_submit_input_click_requires_confirmation():
+    async def scenario():
+        browser = BrowserWrapper()
+        await browser.start()
+        try:
+            await browser.navigate_to(FIXTURE_URL)
+            elements = await browser.get_interactive_elements()
+            cont = index_of(elements, selector="#continue")
+            prompts: list[str] = []
+            llm = ScriptedLLM(
+                [
+                    make_action("click the continue submit input", "click", element=f"E{cont}"),
+                    make_action("finish", "done", answer="done"),
+                ]
+            )
+
+            def on_confirm(prompt: str) -> bool:
+                prompts.append(prompt)
+                return False
+
+            result = await run_turn("Continue", browser, llm, on_confirm=on_confirm)
+
+            assert len(prompts) == 1
+            assert result.transcript[0]["result"] == "ERROR: USER DECLINED this action"
+        finally:
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
 def test_sensitive_without_callback_declines():
     async def scenario():
         browser = BrowserWrapper()

@@ -105,7 +105,7 @@ All parameters optional; validation failure triggers the repair path.
 
 | Signal | Detected via |
 |---|---|
-| Form submission | `type=submit` or button text ∈ {submit, sign in, log in, pay, purchase, buy, order, confirm, send} |
+| Form submission | submit control that owns a form (`type=submit` + `el.form`), or a target/title label containing (word-boundary) ∈ {submit, sign in, log in, pay, purchase, buy, order, confirm, send} |
 | Login | password field on page + click/type action |
 | Purchase/payment | keyword ∈ {pay, purchase, buy, checkout, price} in target or page title |
 
