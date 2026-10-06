@@ -150,6 +150,7 @@ async def run_turn(
     on_step: Callable[[dict, dict, list], None] | None = None,
     max_steps: int = MAX_STEPS,
     max_history: int = MAX_HISTORY_STEPS,
+    print_steps: bool = True,
 ) -> TurnResult:
     history: list[dict] = []
     transcript: list[dict] = []
@@ -179,7 +180,8 @@ async def run_turn(
             if str(exc).startswith(TRANSPORT_ERROR_PREFIX):
                 return TurnResult("error", str(exc), steps_used, transcript)
             result = f"ERROR: {exc}"
-            print(format_step_line(step, max_steps, "error", str(exc)))
+            if print_steps:
+                print(format_step_line(step, max_steps, "error", str(exc)))
             entry = {
                 "step": step,
                 "observation": observation,
@@ -193,7 +195,8 @@ async def run_turn(
             emit(entry)
             continue
 
-        print(format_step_line(step, max_steps, message.action, message.thought))
+        if print_steps:
+            print(format_step_line(step, max_steps, message.action, message.thought))
 
         if message.action == "done":
             entry = {
