@@ -2,6 +2,9 @@ playwright
 ollama
 pydantic
 python-dotenv
+fastapi
+uvicorn
 
 # dev-only
 pytest
+httpx

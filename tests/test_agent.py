@@ -408,3 +408,36 @@ def test_on_step_receives_entry_page_info_and_elements():
             await browser.close()
 
     asyncio.run(scenario())
+
+def test_on_confirm_and_on_ask_may_be_async():
+    async def scenario():
+        browser = BrowserWrapper()
+        await browser.start()
+        try:
+            await browser.navigate_to(FIXTURE_URL)
+            elements = await browser.get_interactive_elements()
+            submit = index_of(elements, role="button", text="Submit")
+            llm = ScriptedLLM(
+                [
+                    make_action("click submit", "click", element=f"E{submit}"),
+                    make_action("need input", "ask_user", question="Which?"),
+                    make_action("finish", "done", answer="done"),
+                ]
+            )
+
+            async def decline(prompt):
+                return False
+
+            async def reply(question):
+                return "hello"
+
+            result = await run_turn(
+                "Submit then ask", browser, llm, on_confirm=decline, on_ask=reply
+            )
+            assert result.status == "done"
+            assert "USER DECLINED" in result.transcript[0]["result"]
+            assert result.transcript[1]["result"] == "hello"
+        finally:
+            await browser.close()
+
+    asyncio.run(scenario())
