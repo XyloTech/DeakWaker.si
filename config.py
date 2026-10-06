@@ -22,8 +22,8 @@ def _env_bool(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-GROQ_API_KEY: str | None = os.getenv("GROQ_API_KEY") or None
-MODEL: str = _env_str("MODEL", "llama-3.3-70b-versatile")
+OLLAMA_HOST: str = _env_str("OLLAMA_HOST", "http://127.0.0.1:11434")
+MODEL: str = _env_str("MODEL", "llama3.1:8b")
 MAX_STEPS: int = _env_int("MAX_STEPS", 15)
 MAX_HISTORY_STEPS: int = _env_int("MAX_HISTORY_STEPS", 10)
 OBSERVATION_TEXT_LIMIT: int = _env_int("OBSERVATION_TEXT_LIMIT", 2000)

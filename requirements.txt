@@ -1,5 +1,5 @@
 playwright
-groq
+ollama
 pydantic
 python-dotenv
 

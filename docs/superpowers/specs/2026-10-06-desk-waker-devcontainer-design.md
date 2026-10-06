@@ -54,7 +54,7 @@ No application code, `requirements.txt`, `.gitignore`, or spec/plan files are mo
 1. **desk.waker** — one-paragraph description: terminal-chat autonomous browser agent, Llama via Groq + Playwright.
 2. **Development environment** — "Open in Codespaces" (repo → Code → Codespaces) and VS Code "Reopen in Container" instructions; note Docker Desktop required for local VS Code use only.
 3. **Run tests** — `pytest -v` (live-Groq test skips without key).
-4. **Run the agent** — copy `.env.example` to `.env`, set `GROQ_API_KEY`, run `python chat.py`.
+4. **Run the agent** — ensure Ollama is running (`ollama pull llama3.1:8b`), optionally set `OLLAMA_HOST`/`MODEL` in `.env`, run `python chat.py`.
 5. **Project layout** — the six modules from the existing spec (`config.py`, `browser.py`, `llm.py`, `agent.py`, `chat.py`, `tests/`), one line each.
 6. **Spec/blueprint links** — pointers to `desk.waker.llm.md` and `docs/superpowers/specs/`.
 

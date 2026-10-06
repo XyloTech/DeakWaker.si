@@ -109,8 +109,27 @@ def test_next_action_backoff_recovers(monkeypatch):
     assert slept and slept[0] <= 1.0
 
 
+def test_default_client_completes_via_ollama(monkeypatch):
+    captured: dict = {}
+
+    def fake_complete(host: str, model: str, messages: list[dict]) -> str:
+        captured.update(host=host, model=model, messages=messages)
+        return json.dumps(VALID_PAYLOAD)
+
+    monkeypatch.setattr(llm, "_ollama_complete", fake_complete)
+
+    client = LLMClient()
+    result = client.next_action([{"role": "system", "content": "sys"}])
+
+    assert isinstance(result, ActionMessage)
+    assert result.action == "navigate"
+    assert captured["host"] == llm.OLLAMA_HOST
+    assert captured["model"] == llm.MODEL
+    assert captured["messages"][0] == {"role": "system", "content": "sys"}
+
+
 @pytest.mark.live
-@pytest.mark.skipif(not os.getenv("GROQ_API_KEY"), reason="GROQ_API_KEY not set")
+@pytest.mark.skipif(not os.getenv("LIVE_LLM"), reason="LIVE_LLM not set")
 def test_next_action_live_smoke():
     client = LLMClient()
     messages = build_messages(

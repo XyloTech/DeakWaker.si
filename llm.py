@@ -4,7 +4,7 @@ from typing import Callable, Literal
 
 from pydantic import BaseModel, ValidationError
 
-from config import GROQ_API_KEY, MAX_HISTORY_STEPS, MODEL, OBSERVATION_TEXT_LIMIT
+from config import MAX_HISTORY_STEPS, MODEL, OBSERVATION_TEXT_LIMIT, OLLAMA_HOST
 
 REPAIR_PROMPT = (
     "Your last output was invalid: {error}. "
@@ -141,22 +141,26 @@ def build_messages(goal: str, observation: str, history: list[dict]) -> list[dic
     return messages
 
 
+def _ollama_complete(host: str, model: str, messages: list[dict]) -> str:
+    from ollama import Client
+
+    response = Client(host=host).chat(model=model, messages=messages, format="json")
+    return str(response["message"]["content"])
+
+
 class LLMClient:
     def __init__(
         self,
         *,
-        api_key: str | None = GROQ_API_KEY,
+        host: str = OLLAMA_HOST,
         model: str = MODEL,
         complete_fn: Callable[[list[dict]], str] | None = None,
     ):
+        self.host = host
         self.model = model
-        self._api_key = api_key
-        self._complete_fn = complete_fn
-        self._client = None
         if complete_fn is None:
-            from groq import Groq
-
-            self._client = Groq(api_key=api_key)
+            complete_fn = lambda msgs: _ollama_complete(host, model, msgs)
+        self._complete_fn = complete_fn
 
     def next_action(self, messages: list[dict]) -> ActionMessage:
         raw = self._call_with_backoff(messages)
@@ -187,17 +191,4 @@ class LLMClient:
         raise LLMOutputError(f"LLM API unavailable: {last_error}") from last_error
 
     def _complete(self, messages: list[dict]) -> str:
-        if self._complete_fn is not None:
-            return self._complete_fn(messages)
-        try:
-            response = self._client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                response_format={"type": "json_object"},
-            )
-        except TypeError:
-            response = self._client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-            )
-        return response.choices[0].message.content or ""
+        return self._complete_fn(messages)
