@@ -1,0 +1,123 @@
+import json
+import os
+import pathlib
+import sys
+
+import pytest
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+import llm
+from llm import (
+    ActionMessage,
+    LLMClient,
+    LLMOutputError,
+    build_messages,
+    render_observation,
+)
+
+VALID_PAYLOAD = {
+    "thought": "x",
+    "action": "navigate",
+    "parameters": {"url": "https://example.com"},
+}
+
+PAGE_INFO = {
+    "url": "https://example.com/",
+    "title": "Example Domain",
+    "text": "Example Domain\nThis domain is for use in examples.",
+    "has_password": False,
+}
+
+ELEMENTS = [
+    {"index": 0, "role": "button", "text": "Go", "selector": "button"},
+    {"index": 7, "role": "link", "text": "More info", "selector": "a"},
+]
+
+
+def test_render_observation_formats_element_lines():
+    output = render_observation(PAGE_INFO, ELEMENTS)
+    assert '[E0] button "Go"' in output
+    assert '[E7] link "More info"' in output
+    assert "https://example.com/" in output
+    assert "Example Domain" in output
+
+
+def test_build_messages_contains_goal_and_observation():
+    goal = "Click the Go button"
+    observation = 'URL: https://example.com/\nElements:\n[E0] button "Go"'
+    history = [
+        {"thought": "Scroll down to find the button", "action": "scroll", "result": "OK"},
+        {
+            "thought": "Click the Go button now",
+            "action": "click",
+            "result": "ERROR: stale element",
+        },
+    ]
+
+    messages = build_messages(goal, observation, history)
+
+    assert messages[0]["role"] == "system"
+    assert goal in messages[0]["content"]
+    assert any(observation in message["content"] for message in messages)
+    blob = "\n".join(message["content"] for message in messages)
+    for step in history:
+        assert step["thought"] in blob
+        assert step["action"] in blob
+        assert step["result"] in blob
+    assert messages[-1]["content"] == "Decide the next single action."
+
+
+def test_next_action_backoff_then_fails(monkeypatch):
+    slept: list[float] = []
+    monkeypatch.setattr(llm.time, "sleep", slept.append)
+    calls: list[list[dict]] = []
+
+    def complete_fn(messages: list[dict]) -> str:
+        calls.append(messages)
+        raise ConnectionError("rate limited")
+
+    client = LLMClient(complete_fn=complete_fn)
+    with pytest.raises(LLMOutputError) as excinfo:
+        client.next_action([{"role": "system", "content": "sys"}])
+
+    assert len(calls) == 3
+    assert "LLM API unavailable" in str(excinfo.value)
+    assert "rate limited" in str(excinfo.value)
+    assert len(slept) == 2
+    assert slept[0] <= 1.0
+    assert slept[1] > slept[0]
+
+
+def test_next_action_backoff_recovers(monkeypatch):
+    slept: list[float] = []
+    monkeypatch.setattr(llm.time, "sleep", slept.append)
+    calls: list[list[dict]] = []
+
+    def complete_fn(messages: list[dict]) -> str:
+        calls.append(messages)
+        if len(calls) < 3:
+            raise ConnectionError("rate limited")
+        return json.dumps(VALID_PAYLOAD)
+
+    client = LLMClient(complete_fn=complete_fn)
+    result = client.next_action([{"role": "system", "content": "sys"}])
+
+    assert isinstance(result, ActionMessage)
+    assert result.action == "navigate"
+    assert len(calls) == 3
+    assert slept and slept[0] <= 1.0
+
+
+@pytest.mark.live
+@pytest.mark.skipif(not os.getenv("GROQ_API_KEY"), reason="GROQ_API_KEY not set")
+def test_next_action_live_smoke():
+    client = LLMClient()
+    messages = build_messages(
+        goal="Navigate to https://example.com",
+        observation='URL: about:blank\nTitle: \nElements:\nVisible text:',
+        history=[],
+    )
+    result = client.next_action(messages)
+    assert isinstance(result, ActionMessage)
+    assert result.action == "navigate"
