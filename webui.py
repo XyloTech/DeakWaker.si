@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from agent import TurnResult, run_turn
 from browser import BrowserWrapper
 from chat import SessionLogger
-from config import HEADLESS
+from config import HEADLESS, MAX_STEPS, THINKING_MODE
 from llm import LLMClient
 
 DEFAULT_CONFIRM_TIMEOUT = 300.0

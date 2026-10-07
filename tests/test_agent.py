@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from agent import TurnResult, format_step_line, run_turn
+from agent import TurnResult, _find_remapped_element, format_step_line, run_turn
 from browser import BrowserWrapper
 from llm import ActionMessage, ActionParameters, LLMOutputError, Verdict
 
@@ -57,6 +57,16 @@ def index_of(elements: list[dict], **criteria) -> int:
         if all(element.get(key) == value for key, value in criteria.items()):
             return element["index"]
     raise AssertionError(f"No element matches {criteria!r}")
+
+
+def test_dynamic_element_can_be_remapped_across_role_changes():
+    current = [
+        {"index": 4, "role": "button", "text": "Yo Yo Honey Singh"},
+        {"index": 5, "role": "button", "text": "Yo Yo Honey Singh"},
+    ]
+    assert _find_remapped_element(("tab", "Yo Yo Honey Singh"), current) is None
+    current.pop()
+    assert _find_remapped_element(("tab", "Yo Yo Honey Singh"), current) == current[0]
 
 
 def test_loop_reaches_done_in_three_steps():

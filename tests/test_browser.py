@@ -252,6 +252,58 @@ def test_persistent_profile_survives_restart(tmp_path, monkeypatch):
         thread.join(timeout=5)
 
 
+def test_smart_click_recovers_when_selector_becomes_duplicated():
+    async def scenario():
+        browser = BrowserWrapper()
+        await browser.start()
+        try:
+            await browser.navigate_to(FIXTURE_URL)
+            await browser._page.evaluate(
+                """() => {
+                    document.body.insertAdjacentHTML(
+                        'beforeend',
+                        '<button id="dynamic-target">Play yoyo</button>' +
+                        '<button id="dynamic-target">Other video</button>'
+                    );
+                }"""
+            )
+            browser._elements = [
+                {
+                    "index": 0,
+                    "role": "button",
+                    "text": "Play yoyo",
+                    "selector": "#dynamic-target",
+                    "submit": False,
+                }
+            ]
+            assert await browser.smart_click(0) == "OK"
+        finally:
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+def test_page_observation_retries_after_navigation_race():
+    async def scenario():
+        async with open_browser() as browser:
+            await browser.navigate_to(FIXTURE_URL)
+            real_evaluate = browser._page.evaluate
+            calls = {"count": 0}
+
+            async def flaky_evaluate(script):
+                calls["count"] += 1
+                if calls["count"] == 1:
+                    raise PlaywrightError("Execution context was destroyed")
+                return await real_evaluate(script)
+
+            with patch.object(browser._page, "evaluate", side_effect=flaky_evaluate):
+                info = await browser.get_page_info()
+            assert "Fixture" in info["title"]
+            assert calls["count"] == 2
+
+    asyncio.run(scenario())
+
+
 def test_constructor_resolves_headless_from_config_at_init(monkeypatch):
     monkeypatch.setattr(browser_mod, "HEADLESS", True)
     assert BrowserWrapper().headless is True
@@ -275,6 +327,7 @@ def test_constructor_explicit_args_win_over_config(monkeypatch):
 def test_resolve_channel_passes_chrome_through():
     assert browser_mod._resolve_channel("chrome") == "chrome"
     assert browser_mod._resolve_channel("msedge") == "msedge"
+    assert browser_mod._resolve_channel("brave") == "brave"
 
 
 def test_resolve_channel_maps_none_tokens_to_no_channel():
@@ -294,14 +347,15 @@ def test_constructor_explicit_channel_wins_over_config(monkeypatch):
     assert BrowserWrapper(channel="msedge").channel == "msedge"
 
 
-def test_launch_falls_back_to_bundled_chromium_when_channel_fails():
+def test_launch_falls_back_to_bundled_chromium_when_channel_fails(monkeypatch):
     async def scenario():
+        monkeypatch.setattr(browser_mod, "BROWSER_ALLOW_FALLBACK", True)
         wrapper = BrowserWrapper(channel="chrome")
         attempts = []
 
         class FakeChromium:
             async def launch_persistent_context(
-                self, user_data_dir, *, headless, slow_mo, channel=None
+                self, user_data_dir, *, headless, slow_mo, args, channel=None
             ):
                 attempts.append(channel)
                 if channel == "chrome":
@@ -313,7 +367,7 @@ def test_launch_falls_back_to_bundled_chromium_when_channel_fails():
         wrapper._playwright = type("FakePW", (), {"chromium": FakeChromium()})()
         context = await wrapper._open_context()
         assert context == "bundled-context"
-        assert attempts == ["chrome", None]
+        assert attempts == ["chrome", "msedge"]
 
     asyncio.run(scenario())
 
@@ -324,7 +378,7 @@ def test_launch_does_not_fallback_when_channel_unconfigured():
 
         class FakeChromium:
             async def launch_persistent_context(
-                self, user_data_dir, *, headless, slow_mo, channel=None
+                self, user_data_dir, *, headless, slow_mo, args, channel=None
             ):
                 raise PlaywrightError("boom")
 
@@ -524,4 +578,110 @@ def test_upload_missing_file_reports_no_such_file():
                 assert name == os.path.basename(tmp_path)
             finally:
                 os.unlink(tmp_path)
+    asyncio.run(scenario())
+
+
+def test_launch_uses_explicit_browser_executable(monkeypatch):
+    async def scenario():
+        wrapper = BrowserWrapper(channel="none")
+        calls = []
+
+        class FakeChromium:
+            async def launch_persistent_context(self, user_data_dir, **options):
+                calls.append((user_data_dir, options))
+                return "explicit-context"
+
+        monkeypatch.setattr(browser_mod, "BROWSER_EXECUTABLE", "/usr/bin/google-chrome")
+        wrapper._playwright = type("FakePW", (), {"chromium": FakeChromium()})()
+        assert await wrapper._open_context() == "explicit-context"
+        assert calls[0][1]["executable_path"] == "/usr/bin/google-chrome"
+        assert "channel" not in calls[0][1]
+
+    asyncio.run(scenario())
+
+
+def test_navigation_retries_timeout_with_commit():
+    async def scenario():
+        wrapper = BrowserWrapper(channel="none")
+        calls = []
+
+        class FakePage:
+            async def goto(self, url, *, timeout, wait_until):
+                calls.append(wait_until)
+                if len(calls) == 1:
+                    raise PlaywrightError("Timeout 15000ms exceeded")
+                return type("Response", (), {"status": 200})()
+
+        wrapper._page = FakePage()
+        result = await wrapper.navigate_to("https://example.com")
+        assert result["http_status"] == 200
+        assert calls == ["domcontentloaded", "commit"]
+
+    asyncio.run(scenario())
+
+
+def test_detect_browsers_entries_have_selection_metadata():
+    detected = browser_mod.detect_browsers()
+
+    assert isinstance(detected, list)
+    for browser in detected:
+        assert {"name", "executable", "playwright_channel", "usable_here"} <= set(browser)
+
+
+def test_launch_brave_uses_detected_executable(monkeypatch):
+    async def scenario():
+        monkeypatch.setattr(
+            browser_mod,
+            "detect_browsers",
+            lambda: [
+                {
+                    "name": "brave",
+                    "executable": "/usr/bin/brave-browser",
+                    "playwright_channel": "",
+                    "usable_here": True,
+                }
+            ],
+        )
+        wrapper = BrowserWrapper(channel="brave")
+        calls = []
+
+        class FakeChromium:
+            async def launch_persistent_context(self, user_data_dir, **options):
+                calls.append(options)
+                return "brave-context"
+
+        wrapper._playwright = type("FakePW", (), {"chromium": FakeChromium()})()
+        context = await wrapper._open_context()
+        assert context == "brave-context"
+        assert calls[0]["executable_path"] == "/usr/bin/brave-browser"
+        assert "channel" not in calls[0]
+        assert wrapper.launched_browser == "/usr/bin/brave-browser"
+
+    asyncio.run(scenario())
+
+
+def test_navigation_tries_goindigo_redirect_target():
+    async def scenario():
+        wrapper = BrowserWrapper(channel="none")
+        calls = []
+
+        class FakePage:
+            url = "about:blank"
+
+            async def goto(self, url, *, timeout, wait_until):
+                calls.append(url)
+                if url.endswith(".com/"):
+                    raise PlaywrightError("net::ERR_ABORTED")
+                return type("Response", (), {"status": 200})()
+
+        wrapper._page = FakePage()
+        result = await wrapper.navigate_to("https://www.goindigo.com/")
+
+        assert result["http_status"] == 200
+        assert calls == [
+            "https://www.goindigo.com/",
+            "https://www.goindigo.com/",
+            "https://www.goindigo.in/",
+        ]
+
     asyncio.run(scenario())

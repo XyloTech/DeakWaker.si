@@ -44,6 +44,25 @@ def test_normalize_url_lives_in_actions():
     assert normalize_url("youtube.com") == "https://youtube.com"
 
 
+def test_parse_element_accepts_model_reference_formats():
+    assert parse_element("E21") == 21
+    assert parse_element("[E21]") == 21
+    assert parse_element("[e21]") == 21
+    assert parse_element("E21]") is None
+
+
+def test_wait_validation_rejects_invalid_duration():
+    from llm import ActionMessage, ActionParameters
+
+    error = ACTIONS["wait"].validate(
+        None,
+            ActionMessage(
+            thought="wait", action="wait", parameters=ActionParameters(seconds=20)
+        ),
+    )
+    assert error and "seconds" in error
+
+
 # New Task 8 tests
 
 def test_select_dispatch_selects_fixture_dropdown():

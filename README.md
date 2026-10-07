@@ -38,14 +38,15 @@ The live-LLM test skips unless `LIVE_LLM=1` is set (`LIVE_LLM=1 python -m pytest
 - switch_tab: make another tab active; parameters.tab is the zero-based index
 - type: replace the text in an input with parameters.text
 - upload: attach a local file to a file input; parameters.element + parameters.path
+- wait: wait briefly for a dynamic page to settle; parameters.seconds is 0.1 to 10
 
 ## Run the agent
 
 1. Ensure Ollama is running (`ollama serve`) and the model is pulled: `ollama pull qwen3:latest`.
-2. Optionally copy `.env.example` to `.env` to override `OLLAMA_HOST`, `MODEL`, `THINKING` (model reasoning; off by default for speed), `HEADLESS`, `USER_DATA_DIR`, `SLOW_MO_MS`, `BROWSER_CHANNEL`, `AUTO_CONFIRM`, `EXTRACT_QUERY`, `NEW_TAB_URL`, `SWITCH_TAB_INDEX`, or `EXTRACT_TIMEOUT`.
+2. Optionally copy `.env.example` to `.env` to override `OLLAMA_HOST`, `MODEL`, `THINKING` (model reasoning; off by default for speed), `HEADLESS`, `USER_DATA_DIR`, `SLOW_MO_MS`, `BROWSER_CHANNEL`, `BROWSER_EXECUTABLE`, `BROWSER_CDP_URL`, `BROWSER_ALLOW_FALLBACK`, `AUTO_CONFIRM`, `EXTRACT_QUERY`, `NEW_TAB_URL`, `SWITCH_TAB_INDEX`, or `EXTRACT_TIMEOUT`.
 3. Run `python chat.py`.
 
-A visible window of your installed Google Chrome opens by default so you can watch every action (`BROWSER_CHANNEL=chrome`; it falls back to bundled Chromium if Chrome is missing, and `BROWSER_CHANNEL=none` forces the bundled browser). `SLOW_MO_MS` defaults to 100 ms of human-like delay per action when headful. Logins/cookies persist across runs in `./user_data/` (gitignored) — sign into a site once in the agent's window and it stays signed in. Set `HEADLESS=1` for invisible runs (required in Codespaces/devcontainer, which have no display). Sensitive actions (logins, submits, purchases) auto-approve by default (`AUTO_CONFIRM=1`); set `AUTO_CONFIRM=0` to be asked y/N before each one. When a step fails, the agent is shown recent console/network errors so it can diagnose and recover on its own.
+A visible window of the explicitly selected browser opens by default (`BROWSER_CHANNEL=brave`). The agent reports the actual browser and profile used and does not silently switch to Chrome or another browser; set `BROWSER_CDP_URL=http://127.0.0.1:9222` to connect to a Brave window you opened and authenticated manually with remote debugging. Brave is detected from standard Windows, Linux, and WSL locations; in WSL, a Windows `.exe` is reported but is not launched by Linux Playwright, so install Linux Brave or use the Windows agent. `USER_DATA_DIR` selects the persistent profile, so manual sign-in is reused across runs. Fast mode defaults to `SLOW_MO_MS=0`, six history steps, a 1600-character page observation, and 80 interactive elements per Ollama prompt; omitted elements remain clickable after a later observation. Set `HEADLESS=1` for invisible runs. Sensitive actions require confirmation when `AUTO_CONFIRM=0`; keep that setting for real workflows.
 
 ## Web UI
 

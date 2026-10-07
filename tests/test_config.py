@@ -9,3 +9,7 @@ def test_env_float_missing_or_invalid_returns_default(monkeypatch):
     assert config._env_float("FLOAT_X", 0.1) == 0.1
     monkeypatch.setenv("FLOAT_X", "junk")
     assert config._env_float("FLOAT_X", 0.1) == 0.1
+
+
+def test_default_browser_is_brave():
+    assert config._DEFAULT_BROWSER_CHANNEL == "brave"

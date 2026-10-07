@@ -118,6 +118,33 @@ def test_parameters_default_to_none():
     assert result.parameters.direction is None
 
 
+def test_parse_action_supports_dynamic_page_wait():
+    result = parse_action(
+        json.dumps(
+            {
+                "thought": "let the SPA finish rendering",
+                "action": "wait",
+                "parameters": {"seconds": 0.5},
+            }
+        )
+    )
+    assert result.action == "wait"
+    assert result.parameters.seconds == 0.5
+
+
+def test_parse_action_rejects_non_numeric_wait_duration():
+    with pytest.raises(LLMOutputError):
+        parse_action(
+            json.dumps(
+                {
+                    "thought": "wait",
+                    "action": "wait",
+                    "parameters": {"seconds": "later"},
+                }
+            )
+        )
+
+
 def test_parse_verdict_complete_true():
     raw = json.dumps({"complete": True, "reason": "video is playing"})
     verdict = parse_verdict(raw)

@@ -54,6 +54,18 @@ def test_render_observation_omits_http_line_when_unknown():
     assert "HTTP:" not in out
 
 
+def test_render_observation_caps_large_element_lists_without_renumbering(monkeypatch):
+    monkeypatch.setattr(llm, "OBSERVATION_ELEMENT_LIMIT", 1)
+    elements = [
+        {"index": 4, "role": "button", "text": "First", "selector": "#first"},
+        {"index": 9, "role": "link", "text": "Second", "selector": "#second"},
+    ]
+    output = render_observation(PAGE_INFO, elements)
+    assert '[E4] button "First"' in output
+    assert '[E9] link "Second"' not in output
+    assert "1 more elements are not shown" in output
+
+
 def test_build_messages_contains_goal_and_observation():
     goal = "Click the Go button"
     observation = 'URL: https://example.com/\nElements:\n[E0] button "Go"'
@@ -142,6 +154,25 @@ def test_default_client_completes_via_ollama(monkeypatch):
     assert captured["messages"][0] == {"role": "system", "content": "sys"}
 
 
+def test_chat_reply_uses_normal_conversation_prompt(monkeypatch):
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, *, host, timeout):
+            captured.update(host=host, timeout=timeout)
+
+        def chat(self, **kwargs):
+            captured["kwargs"] = kwargs
+            return {"message": {"content": "Hello!"}}
+
+    monkeypatch.setattr(llm, "Client", FakeClient)
+    reply = LLMClient().chat_reply("hello")
+    assert reply == "Hello!"
+    assert captured["kwargs"]["messages"][0]["role"] == "system"
+    assert "friendly local assistant" in captured["kwargs"]["messages"][0]["content"]
+    assert captured["kwargs"]["messages"][1]["content"] == "hello"
+
+
 def test_ollama_complete_passes_timeout_and_options(monkeypatch):
     captured = {}
 
@@ -207,6 +238,15 @@ def test_system_rules_limit_ask_user_and_require_verification():
     content = llm.build_messages("g", "obs", [])[0]["content"]
     assert "one-time codes" in content
     assert "Verify the outcome against the goal" in content
+
+
+def test_system_rules_understand_human_language_and_mixed_input():
+    content = llm.build_messages("open youtube and pay yoyo", "obs", [])[0]["content"]
+    assert "obvious typos" in content
+    assert "Hinglish" in content
+    assert "proper nouns" in content
+    assert "relative dates" in content
+    assert "searching is not booking" in content
 
 
 def test_build_messages_includes_step_budget():

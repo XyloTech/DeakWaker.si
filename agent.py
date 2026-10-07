@@ -1,18 +1,20 @@
 import asyncio
 import inspect
+import json
 import re
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from actions import ACTIONS, ActionContext, ActionSpec, normalize_url, parse_element
+from actions import ACTIONS as REGISTERED_ACTIONS, ActionContext, ActionSpec, normalize_url, parse_element
 from browser import BrowserActionError, BrowserWrapper
-from config import AUTO_CONFIRM, MAX_HISTORY_STEPS, MAX_STEPS
+from config import AUTO_CONFIRM, MAX_HISTORY_STEPS, MAX_STEPS, THINKING_MODE
 from llm import (
     LLMOutputError,
     TRANSPORT_ERROR_PREFIX,
     Verdict,
     build_messages,
     build_verify_messages,
+    build_extract_messages,
     render_observation,
 )
 
@@ -34,6 +36,59 @@ def _target_text(action, elements: list[dict]) -> str:
         if element.get("index") == index:
             return str(element.get("text", ""))
     return ""
+
+
+def _replace_element_reference(message, element_index: int):
+    reference = f"E{element_index}"
+    try:
+        parameters = message.parameters.model_copy(update={"element": reference})
+        return message.model_copy(update={"parameters": parameters})
+    except AttributeError:
+        parameters = message.parameters.copy(update={"element": reference})
+        return message.copy(update={"parameters": parameters})
+
+
+def _find_remapped_element(
+    expected: tuple[str, str] | None, current: list[dict]
+) -> dict | None:
+    if expected is None:
+        return None
+    expected_role, expected_text = expected
+    expected_text = " ".join(expected_text.lower().split())
+    exact = [
+        element
+        for element in current
+        if element.get("role") == expected_role
+        and " ".join(str(element.get("text", "")).lower().split()) == expected_text
+    ]
+    if len(exact) == 1:
+        return exact[0]
+    if expected_text:
+        fuzzy = [
+            element
+            for element in current
+            if element.get("role") == expected_role
+            and (
+                expected_text in " ".join(str(element.get("text", "")).lower().split())
+                or " ".join(str(element.get("text", "")).lower().split()) in expected_text
+            )
+        ]
+        if len(fuzzy) == 1:
+            return fuzzy[0]
+        # Frameworks such as YouTube may replace a tab/link with a button while
+        # preserving its accessible name. A unique label is safe to remap even
+        # when the ARIA role changed; ambiguous labels remain an error.
+        cross_role = [
+            element
+            for element in current
+            if expected_text
+            and expected_text
+            in " ".join(str(element.get("text", "")).lower().split())
+        ]
+        if len(cross_role) == 1:
+            return cross_role[0]
+    role_matches = [element for element in current if element.get("role") == expected_role]
+    return role_matches[0] if len(role_matches) == 1 else None
 
 
 def is_sensitive(action, page_info: dict, elements: list[dict]) -> str | None:
@@ -102,11 +157,17 @@ async def _navigate_handler(ctx: ActionContext, message) -> str:
     params = message.parameters
     if not params.url:
         return "ERROR: navigate requires parameters.url, e.g. https://example.com"
-    await ctx.browser.navigate_to(normalize_url(params.url))
+    target = normalize_url(params.url)
+    setattr(ctx.browser, "last_navigation_url", target)
+    await ctx.browser.navigate_to(target)
     return "OK"
 
 
 async def _click_handler(ctx: ActionContext, message) -> str:
+    if str(ctx.page_info.get("url", "")) == "about:blank" or getattr(
+        ctx.browser, "last_navigation_url", ""
+    ) == "about:blank":
+        return "ERROR: Cannot click: the active page is about:blank"
     index = parse_element(message.parameters.element)
     if index is None:
         valid = ", ".join(f'[E{element["index"]}]' for element in ctx.elements)
@@ -115,8 +176,9 @@ async def _click_handler(ctx: ActionContext, message) -> str:
             f"The browser chrome (address bar, tabs, back button) does not exist — "
             f"you can only reference elements from the observation: {valid}"
         )
-    await ctx.browser.click(index)
-    return "OK"
+    # Use smart_click for retry and scroll-into-view support
+    result = await ctx.browser.smart_click(index)
+    return result
 
 
 async def _type_handler(ctx: ActionContext, message) -> str:
@@ -151,6 +213,32 @@ async def _ask_user_handler(ctx: ActionContext, message) -> str:
     return str(reply)
 
 
+async def _extract_handler(ctx: ActionContext, message) -> str:
+    params = message.parameters
+    if not params.query:
+        return "ERROR: extract requires parameters.query (what to extract, e.g. \"prices as JSON\")"
+    info = await ctx.browser.get_page_info()
+    try:
+        value = await asyncio.to_thread(ctx.llm.extract, build_extract_messages(info["text"], params.query))
+        return "OK · " + json.dumps(value, ensure_ascii=False)
+    except LLMOutputError as exc:
+        return f"ERROR: extraction failed: {exc}"
+
+
+async def _new_tab_handler(ctx: ActionContext, message) -> str:
+    params = message.parameters
+    url = params.url
+    await ctx.browser.new_tab(normalize_url(url) if url else None)
+    return "OK"
+
+
+async def _switch_tab_handler(ctx: ActionContext, message) -> str:
+    params = message.parameters
+    i = int(params.tab)
+    await ctx.browser.switch_tab(i)
+    return "OK"
+
+
 NAVIGATE_VALIDATE_ERROR = "ERROR: navigate requires parameters.url, e.g. https://example.com"
 TYPE_VALIDATE_ERROR = 'ERROR: type requires parameters.text, e.g. "Ada"'
 
@@ -164,6 +252,22 @@ def _navigate_validate(ctx: ActionContext, message) -> str | None:
 def _type_validate(ctx: ActionContext, message) -> str | None:
     if message.parameters.text is None:
         return TYPE_VALIDATE_ERROR
+    return None
+
+
+def _extract_validate(ctx: ActionContext, message) -> str | None:
+    if not message.parameters.query:
+        return "ERROR: extract requires parameters.query (what to extract, e.g. \"prices as JSON\")"
+    return None
+
+
+def _switch_tab_validate(ctx: ActionContext, message) -> str | None:
+    if not message.parameters.tab:
+        return "ERROR: switch_tab requires parameters.tab as a zero-based index"
+    try:
+        int(message.parameters.tab)
+    except (ValueError, TypeError):
+        return "ERROR: switch_tab requires parameters.tab as a zero-based index"
     return None
 
 
@@ -206,7 +310,38 @@ ACTIONS: dict[str, ActionSpec] = {
         requires_element=False,
         handler=_ask_user_handler,
     ),
+    "extract": ActionSpec(
+        name="extract",
+        description="pull structured data out of the page as JSON; parameters.query says what",
+        requires_element=False,
+        handler=_extract_handler,
+        validate=_extract_validate,
+    ),
+    "new_tab": ActionSpec(
+        name="new_tab",
+        description="open a new tab, optionally at parameters.url",
+        requires_element=False,
+        handler=_new_tab_handler,
+    ),
+    "switch_tab": ActionSpec(
+        name="switch_tab",
+        description="make another tab active; parameters.tab is the zero-based index",
+        requires_element=False,
+        handler=_switch_tab_handler,
+        validate=_switch_tab_validate,
+    ),
 }
+
+
+# Preserve the agent's guarded click/navigation handlers while adding the
+# extended browser actions maintained by the shared registry.
+ACTIONS.update(
+    {
+        name: spec
+        for name, spec in REGISTERED_ACTIONS.items()
+        if name not in ACTIONS
+    }
+)
 
 
 async def _execute_dispatch(
@@ -277,6 +412,7 @@ async def run_turn(
     on_confirm: Callable[[str], bool] | None = None,
     on_ask: Callable[[str], str] | None = None,
     on_step: Callable[[dict, dict, list], None] | None = None,
+    on_thinking: Callable[[bool], None] | None = None,
     max_steps: int = MAX_STEPS,
     max_history: int = MAX_HISTORY_STEPS,
     print_steps: bool = True,
@@ -298,6 +434,22 @@ async def run_turn(
             return TurnResult("error", f"Observation failed: {exc}", steps_used, transcript)
         observation = render_observation(page_info, elements)
 
+        # Handle HTTP errors
+        http_error = await browser.handle_http_error(page_info.get("http_status"))
+        if http_error:
+            # Store the error in diagnostics for the LLM to see
+            await browser.clear_diagnostics()
+            await browser.get_diagnostics()  # clear previous
+            # Try to dismiss cookie banners/pop-ups on error pages
+            await browser.dismiss_cookie_banner()
+            await browser.dismiss_popups()
+
+        # Dismiss cookie banners and pop-ups at the start of each turn
+        await browser.dismiss_cookie_banner()
+        await browser.dismiss_popups()
+
+        if on_thinking is not None:
+            on_thinking(True)
         try:
             message = await asyncio.to_thread(
                 llm.next_action,
@@ -322,6 +474,9 @@ async def run_turn(
             history.append({"thought": "", "action": "error", "result": result})
             history = history[-max_history:]
             continue
+        finally:
+            if on_thinking is not None:
+                on_thinking(False)
 
         if print_steps:
             print(format_step_line(step, max_steps, message.action, message.thought))
@@ -397,6 +552,26 @@ async def run_turn(
             on_ask=on_ask,
         )
 
+        dispatch_elements: list[dict] | None = None
+        if index is not None and expected is not None:
+            try:
+                current_elements = await browser.get_interactive_elements()
+            except BrowserActionError:
+                current_elements = elements
+            dispatch_elements = current_elements
+            current = next(
+                (element for element in current_elements if element["index"] == index),
+                None,
+            )
+            if current is None or (current["role"], current["text"]) != expected:
+                remapped = _find_remapped_element(expected, current_elements)
+                if remapped is not None:
+                    message = _replace_element_reference(message, remapped["index"])
+                    index = remapped["index"]
+                    expected = (remapped["role"], remapped["text"])
+                    elements = current_elements
+                    ctx.elements = current_elements
+
         if message.action == "ask_user":
             result = await _ask_user_handler(ctx, message)
             if result.startswith("ERROR"):
@@ -421,7 +596,12 @@ async def run_turn(
         spec = ACTIONS.get(message.action)
         if spec is None:
             result = f"ERROR: unknown action {message.action!r}"
-        elif spec.requires_element and index is None:
+        elif spec.requires_element and (
+            index is None
+            or not any(element["index"] == index for element in elements)
+            or str(page_info.get("url", "")) == "about:blank"
+            or getattr(browser, "last_navigation_url", "") == "about:blank"
+        ):
             valid = ", ".join(f'[E{element["index"]}]' for element in elements)
             result = (
                 f"ERROR: invalid element reference {message.parameters.element!r}. "
@@ -443,7 +623,7 @@ async def run_turn(
                 else:
                     if index is not None:
                         found = next(
-                            (e for e in await browser.get_interactive_elements() if e["index"] == index),
+                            (e for e in (dispatch_elements or await browser.get_interactive_elements()) if e["index"] == index),
                             None,
                         )
                         if found is None or (found["role"], found["text"]) != expected:
@@ -465,7 +645,7 @@ async def run_turn(
             else:
                 if index is not None:
                     found = next(
-                        (e for e in await browser.get_interactive_elements() if e["index"] == index),
+                        (e for e in (dispatch_elements or await browser.get_interactive_elements()) if e["index"] == index),
                         None,
                     )
                     if found is None or (found["role"], found["text"]) != expected:
@@ -488,6 +668,12 @@ async def run_turn(
             diagnostics = _recent_diagnostics(browser)
             if diagnostics:
                 result = f"{result}\nRecent browser errors: {diagnostics}"
+
+        try:
+            page_info = await browser.get_page_info()
+            elements = await browser.get_interactive_elements()
+        except BrowserActionError:
+            pass
 
         entry = {
             "step": step,

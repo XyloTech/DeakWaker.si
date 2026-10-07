@@ -88,6 +88,28 @@ def test_main_prints_clean_message_on_unexpected_error(monkeypatch, capsys):
     assert "Traceback" not in captured.out
 
 
+def test_wsl_windows_brave_handoff_is_selected(monkeypatch):
+    monkeypatch.setenv("WSL_DISTRO_NAME", "kali-linux")
+    monkeypatch.setattr(chat, "BROWSER_CHANNEL", "brave")
+    monkeypatch.setattr(
+        chat,
+        "detect_browsers",
+        lambda: [{"name": "brave-windows-host"}],
+    )
+    assert chat._needs_windows_brave_handoff() is True
+
+
+def test_handoff_runs_windows_python(monkeypatch):
+    calls = []
+
+    class Completed:
+        returncode = 0
+
+    monkeypatch.setattr(chat.subprocess, "run", lambda *args, **kwargs: calls.append((args, kwargs)) or Completed())
+    chat._run_windows_brave_agent()
+    assert calls[0][0] == (["cmd.exe", "/c", "py", "chat.py"],)
+
+
 def _strip_ansi(text):
     import re
 
@@ -97,7 +119,32 @@ def _strip_ansi(text):
 def test_render_banner_shows_branding():
     banner = _strip_ansi(chat.render_banner())
     assert "desk.waker" in banner
-    assert "product of Xylotech" in banner
+    assert "product of Xylotech, developed by Harshit" in banner
+
+
+def test_normalize_goal_removes_accidentally_pasted_product_brief(capsys):
+    goal = chat._normalize_goal(
+        "see the chrome it still in for testing "
+        "Build a production-ready local browser automation agent\n"
+        "The rest of the pasted request"
+    )
+
+    assert goal == "see the chrome it still in for testing"
+    assert "Ignored pasted product specification" in capsys.readouterr().out
+
+
+def test_normalize_goal_keeps_normal_long_goal():
+    goal = "Open a page and extract this information: " + ("x" * 1000)
+
+    assert chat._normalize_goal(goal) == goal
+
+
+def test_conversational_message_detection():
+    assert chat.is_conversational_message("hello") is True
+    assert chat.is_conversational_message("hi noemal") is True
+    assert chat.is_conversational_message("hello open youtube") is False
+    assert chat.is_conversational_message("find a flight") is False
+    assert chat.is_conversational_message("tell me a joke") is True
 
 
 def test_render_footer_shows_branding():
@@ -142,6 +189,32 @@ def test_render_status_contains_answer():
     failed = _strip_ansi(chat.render_status("error", "Browser is gone"))
     assert "ERROR" in failed
     assert "Browser is gone" in failed
+
+
+def test_render_status_supports_aborted_task():
+    aborted = _strip_ansi(chat.render_status("aborted", "cancelled by Ctrl+C"))
+    assert "ABORTED" in aborted
+    assert "cancelled by Ctrl+C" in aborted
+
+
+def test_goal_sigint_handler_cancels_active_async_task():
+    import asyncio
+
+    async def scenario():
+        task = asyncio.current_task()
+        called = []
+        loop = asyncio.get_running_loop()
+
+        def abort_goal(_signum, _frame):
+            called.append(True)
+            loop.call_soon_threadsafe(task.cancel)
+
+        abort_goal(None, None)
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.sleep(0)
+        assert called
+
+    asyncio.run(scenario())
 
 
 def test_render_confirm_box_keeps_prompt_text():

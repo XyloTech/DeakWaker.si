@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 import time
 from pathlib import Path
 from typing import Callable, Literal
@@ -11,11 +12,13 @@ from config import (
     MAX_HISTORY_STEPS,
     MODEL,
     OBSERVATION_TEXT_LIMIT,
+    OBSERVATION_ELEMENT_LIMIT,
     OLLAMA_HOST,
     OLLAMA_NUM_CTX,
     OLLAMA_TEMPERATURE,
     OLLAMA_TIMEOUT_S,
     THINKING,
+    THINKING_MODE,
 )
 
 REPAIR_PROMPT = (
@@ -24,7 +27,7 @@ REPAIR_PROMPT = (
 )
 
 BACKOFF_ATTEMPTS = 3
-BACKOFF_BASE_DELAY = 0.5
+BACKOFF_BASE_DELAY = 0.2
 DECIDE_PROMPT = "Decide the next single action."
 TRANSPORT_ERROR_PREFIX = "LLM API unavailable"
 
@@ -33,10 +36,19 @@ VERIFY_SYSTEM = (
     "user's goal and the current page state, and you decide whether the goal is "
     "FULLY achieved. Be skeptical: if the required evidence is missing, "
     "ambiguous, or only partially satisfied, answer complete=false. "
-    "Output ONLY valid JSON: {\"complete\": true|false, \"reason\": \"brief explanation\"}."
+    "For video goals, a search-results page or video thumbnail is not completion: "
+    "the requested video must be opened and the player state or playback evidence "
+    "must be visible. Output ONLY valid JSON: {\"complete\": true|false, \"reason\": \"brief explanation\"}."
 )
 
 EXTRACT_SYSTEM = "You extract structured data from web page content. Output ONLY valid JSON matching the user's request. No prose, no markdown fences."
+CONVERSATION_SYSTEM = (
+    "You are a friendly local assistant. Answer the user's ordinary conversation "
+    "naturally and concisely. Do not invent browser actions, claim to have opened "
+    "anything, or expose private data. If the user asks to browse, search, click, "
+    "open, fill, book, send, or control a website, explain that the browser agent "
+    "will handle it rather than pretending it is complete."
+)
 
 SYSTEM_RULES = (
     "- Respond with exactly ONE atomic action per response, as a JSON object with "
@@ -58,12 +70,54 @@ SYSTEM_RULES = (
     "- Recover independently from real-world issues: cookie banners, popups, "
     "overlays, redirects, timeouts, and layout changes — try alternate elements "
     "or scroll to reveal content.\n"
+    "- For dynamic single-page apps, use wait after navigation or a visible layout "
+    "change, then re-observe before clicking. Never click an element from an old "
+    "observation after a major page update.\n"
     "- Handle everyday tasks accurately (search, bookings, shopping, messaging, "
     "accounts): fill fields carefully and double-check before submitting.\n"
     "- Use ask_user only for input only a human can supply: one-time codes, "
     "credentials, payment details, or personal choices.\n"
     "- Verify the outcome against the goal before calling done, and report "
     "failures honestly.\n"
+    "- For video goals, do not stop on search results: click the exact requested "
+    "video, wait for its page/player, and verify playback or clearly report why it "
+    "cannot play.\n"
+)
+
+
+RECOVERY_RULES = (
+    "- Own recovery after errors: re-observe the page and choose a materially "
+    "different safe strategy. For timeouts inspect the current URL and page state; "
+    "for missing elements dismiss overlays or scroll; for redirects try the final "
+    "URL; for blocked, authenticated, or CAPTCHA pages ask the user for manual help. "
+    "Never bypass security challenges or repeat a sensitive submission.\n"
+)
+
+INTENT_RULES = (
+    "- Interpret obvious typos from context: when a video task says 'pay', "
+    "understand it as 'play'. When the user asks for any or a random video, "
+    "choose one matching result, open it, and start playback; do not ask for an "
+    "exact title unless the request is ambiguous.\n"
+)
+
+HUMAN_LANGUAGE_RULES = (
+    "- Understand the user's meaning, not just exact spelling: silently correct "
+    "obvious typos, phonetic spelling, missing words, and grammar mistakes using "
+    "the surrounding context.\n"
+    "- Treat Hinglish, common Hindi/Bengali transliteration, and mixed-language "
+    "instructions as normal input. Keep proper nouns, names, URLs, search terms, "
+    "and quoted text exactly as intended.\n"
+    "- Resolve pronouns and conversational references from recent history, such as "
+    "'that one', 'the first result', 'same site', and 'do it again'.\n"
+    "- Interpret relative dates and times using the supplied local date and timezone; "
+    "never guess when two dates or destinations are plausible.\n"
+    "- Infer the requested outcome before acting: searching is not booking, filling "
+    "is not submitting, and opening a video is not proof that playback started.\n"
+    "- Ask one concise ask_user question only when the missing detail changes the "
+    "safe action. Otherwise choose the most natural low-risk interpretation and "
+    "continue.\n"
+    "- Before sensitive actions, restate the intended target and require confirmation; "
+    "never infer passwords, OTPs, payment details, or private account data.\n"
 )
 
 
@@ -82,11 +136,12 @@ class ActionParameters(BaseModel):
     answer: str | None = None
     query: str | None = None
     tab: str | None = None
+    seconds: float | None = None
 
 
 class ActionMessage(BaseModel):
     thought: str
-    action: Literal["navigate", "click", "type", "scroll", "done", "ask_user", "select", "upload", "screenshot", "extract", "new_tab", "switch_tab"]
+    action: Literal["navigate", "click", "type", "scroll", "wait", "done", "ask_user", "select", "upload", "screenshot", "extract", "new_tab", "switch_tab"]
     parameters: ActionParameters = ActionParameters()
 
 
@@ -218,8 +273,14 @@ def render_observation(page_info: dict, elements: list[dict]) -> str:
         f"{int(page_info.get('tabs', 1))} (active {int(page_info.get('active_tab', 0))})"
     )
     lines.append("Elements:")
-    for element in elements:
+    shown_elements = elements[:OBSERVATION_ELEMENT_LIMIT]
+    for element in shown_elements:
         lines.append(f'[E{element["index"]}] {element["role"]} "{element["text"]}"')
+    if len(elements) > len(shown_elements):
+        lines.append(
+            f"({len(elements) - len(shown_elements)} more elements are not shown; "
+            "scroll or use the next observation before acting on them.)"
+        )
     lines.append("Visible text:")
     text = str(page_info.get("text", ""))[:OBSERVATION_TEXT_LIMIT]
     lines.append(text)
@@ -236,7 +297,10 @@ def _system_prompt(goal: str) -> str:
         actions_block += f"  - {spec.name}: {spec.description}\n"
     return (
         "You are a web navigator driving a real browser to achieve the user's goal."
-        f"\n\nGoal: {goal}\n\nRules:\n{SYSTEM_RULES}"
+        f"\nThe user's local date is {datetime.now().astimezone().date().isoformat()}; "
+        "interpret relative dates such as tomorrow using this date."
+        f"\n\nGoal: {goal}\n\nRules:\n{SYSTEM_RULES}{INTENT_RULES}"
+        f"{HUMAN_LANGUAGE_RULES}{RECOVERY_RULES}"
         f"\n- Actions:{actions_block}"
     )
 
@@ -263,6 +327,12 @@ def decide_prompt(
                 " The previous step failed — reason carefully about why"
                 " before choosing your next action."
             )
+    if history and str(history[-1].get("result", "")).startswith("ERROR"):
+        prompt += (
+            " Recovery checklist: inspect the new page state, use a different "
+            "selector or route, try a permitted alternate site, or ask_user for "
+            "manual intervention. Do not repeat the same failed action."
+        )
     return prompt
 
 
@@ -312,7 +382,13 @@ def _previous_step_failed(messages: list[dict]) -> bool:
 
 def _chat_kwargs(model: str, messages: list[dict]) -> dict:
     kwargs: dict = {"model": model, "messages": messages, "format": "json"}
-    kwargs["think"] = THINKING or _previous_step_failed(messages)
+    think = False
+    if THINKING:
+        think = True
+    elif THINKING_MODE == "auto":
+        # Think if the previous step failed
+        think = _previous_step_failed(messages)
+    kwargs["think"] = think or _previous_step_failed(messages)
     kwargs["options"] = {"temperature": OLLAMA_TEMPERATURE, "num_ctx": OLLAMA_NUM_CTX}
     return kwargs
 
@@ -340,6 +416,18 @@ class LLMClient:
 
     def next_action(self, messages: list[dict]) -> ActionMessage:
         return self._parse_with_repair(messages, parse_action)
+
+    def chat_reply(self, message: str) -> str:
+        response = Client(host=self.host, timeout=self.timeout).chat(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": CONVERSATION_SYSTEM},
+                {"role": "user", "content": message},
+            ],
+            options={"temperature": OLLAMA_TEMPERATURE, "num_ctx": OLLAMA_NUM_CTX},
+            think=False,
+        )
+        return str(response["message"]["content"]).strip()
 
     def verify(self, messages: list[dict]) -> Verdict:
         return self._parse_with_repair(messages, parse_verdict)

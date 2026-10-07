@@ -1,18 +1,27 @@
+import asyncio
+import json
 import re
 from dataclasses import dataclass
 from typing import Any, Callable, Awaitable
 from pathlib import Path
 
+from browser import BrowserActionError
 
-ELEMENT_REF_PATTERN = re.compile(r"^E(\d+)$")
-SCHEME_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
+
+ELEMENT_REF_PATTERN = re.compile(r"^\[?E(\d+)\]?$", re.IGNORECASE)
+SCHEME_PATTERN = re.compile(
+    r"^(?:[a-zA-Z][a-zA-Z0-9+.-]*://|about:|file:|data:)"
+)
 SCREENSHOT_DIR = str(Path("artifacts/screenshots"))
 
 
 def parse_element(reference: str | None) -> int | None:
     if reference is None:
         return None
-    match = ELEMENT_REF_PATTERN.match(reference.strip())
+    value = reference.strip()
+    if value.startswith("[") != value.endswith("]"):
+        return None
+    match = ELEMENT_REF_PATTERN.match(value)
     if match is None:
         return None
     return int(match.group(1))
@@ -49,7 +58,21 @@ async def _navigate_handler(ctx: ActionContext, message) -> str:
     params = message.parameters
     if not params.url:
         return "ERROR: navigate requires parameters.url, e.g. https://example.com"
-    await ctx.browser.navigate_to(normalize_url(params.url))
+    url = normalize_url(params.url)
+    try:
+        await ctx.browser.navigate_to(url)
+    except BrowserActionError as exc:
+        if "goindigo." not in url.lower():
+            raise
+        fallback = "https://www.google.com/travel/flights"
+        try:
+            await ctx.browser.navigate_to(fallback)
+        except BrowserActionError:
+            raise exc
+        return (
+            "OK · airline site was unavailable; opened Google Flights as a fallback "
+            f"({exc})"
+        )
     return "OK"
 
 
@@ -84,6 +107,12 @@ async def _type_handler(ctx: ActionContext, message) -> str:
 async def _scroll_handler(ctx: ActionContext, message) -> str:
     await ctx.browser.scroll(message.parameters.direction or "down")
     return "OK"
+
+
+async def _wait_handler(ctx: ActionContext, message) -> str:
+    seconds = float(message.parameters.seconds or 1)
+    await asyncio.sleep(seconds)
+    return f"OK · waited {seconds:g}s for the page to settle"
 
 
 async def _done_handler(ctx: ActionContext, message) -> str:
@@ -134,6 +163,8 @@ async def _screenshot_handler(ctx: ActionContext, message) -> str:
 
 
 async def _extract_handler(ctx: ActionContext, message) -> str:
+    from llm import LLMOutputError, build_extract_messages
+
     params = message.parameters
     if not params.query:
         return EXTRACT_VALIDATE_ERROR
@@ -209,6 +240,18 @@ def _upload_validate(ctx: ActionContext, message) -> str | None:
     return None
 
 
+def _wait_validate(ctx: ActionContext, message) -> str | None:
+    if message.parameters.seconds is None:
+        return None
+    try:
+        seconds = float(message.parameters.seconds)
+    except (TypeError, ValueError):
+        return "ERROR: wait requires parameters.seconds as a number from 0.1 to 10"
+    if not 0.1 <= seconds <= 10:
+        return "ERROR: wait requires parameters.seconds from 0.1 to 10"
+    return None
+
+
 ACTIONS: dict[str, ActionSpec] = {
     "navigate": ActionSpec(
         name="navigate",
@@ -249,6 +292,13 @@ ACTIONS: dict[str, ActionSpec] = {
         description="scroll the page; parameters.direction is up or down",
         requires_element=False,
         handler=_scroll_handler,
+    ),
+    "wait": ActionSpec(
+        name="wait",
+        description="wait for a dynamic page to settle; parameters.seconds is 0.1 to 10",
+        requires_element=False,
+        handler=_wait_handler,
+        validate=_wait_validate,
     ),
     "done": ActionSpec(
         name="done",
